@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package drawfusion;
+
+// The AI System acts as the Game Master
+// All AI intelligence lives behind this service — the C++ game server
+// calls these RPCs and never runs models directly.
+service GameMaster {
+  // Generate a creative drawing prompt for a round
+  rpc GetPrompt (PromptRequest) returns (PromptResponse) {}
+
+  // Score a player's drawing against the prompt using CLIP
+  rpc JudgeDrawing (JudgeRequest) returns (JudgeResponse) {}
+
+  // Get a contextual hint for a struggling player
+  rpc GetHint (HintRequest) returns (HintResponse) {}
+
+  // Get detailed feedback on a player's drawing after judging
+  rpc GetFeedback (FeedbackRequest) returns (FeedbackResponse) {}
+
+  // Health check — used by C++ server on startup to verify AI service is reachable
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse) {}
+}
+
+// ── GetPrompt ──────────────────────────────────────────────────────
+
+message PromptRequest {
+  string game_id = 1;
+  string difficulty = 2;        // "easy", "medium", "hard"
+  repeated string past_prompts = 3;  // avoid repeats within a session
+}
+
+message PromptResponse {
+  string prompt = 1;
+  string category = 2;          // e.g. "animal", "vehicle", "landmark"
+}
+
+// ── JudgeDrawing ───────────────────────────────────────────────────
+
+message JudgeRequest {
+  string player_id = 1;
+  string prompt = 2;
+  string image_base64 = 3;      // PNG canvas export as base64 string
+}
+
+message JudgeResponse {
+  float score = 1;              // 0.0 to 1.0 similarity score
+  string feedback = 2;          // brief judge comment
+  float confidence = 3;         // model confidence in the score
+}
+
+// ── GetHint ────────────────────────────────────────────────────────
+
+message HintRequest {
+  string game_id = 1;
+  string prompt = 2;
+  float time_remaining = 3;     // seconds left in the round
+  int32 hint_number = 4;        // which hint (1st, 2nd, 3rd) — gets progressively easier
+}
+
+message HintResponse {
+  string hint = 1;
+}
+
+// ── GetFeedback ────────────────────────────────────────────────────
+
+message FeedbackRequest {
+  string player_id = 1;
+  string prompt = 2;
+  string image_base64 = 3;
+  float score = 4;              // the score from JudgeDrawing
+}
+
+message FeedbackResponse {
+  string feedback = 1;          // detailed, constructive feedback
+  repeated string strengths = 2;
+  repeated string improvements = 3;
+}
+
+// ── HealthCheck ────────────────────────────────────────────────────
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool serving = 1;
+  string version = 2;
+}

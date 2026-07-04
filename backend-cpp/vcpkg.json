@@ -1,0 +1,15 @@
+{
+  "name": "drawfusion-cpp-server",
+  "version": "1.0.0",
+  "description": "DrawFusion C++ Game Server — WebSocket + gRPC + PostgreSQL",
+  "dependencies": [
+    "grpc",
+    "protobuf",
+    "uwebsockets",
+    "nlohmann-json",
+    "libpqxx",
+    "jwt-cpp",
+    "spdlog",
+    "fmt"
+  ]
+}

@@ -1,0 +1,69 @@
+# ── C++ & CMake ──────────────────────────────────────────────────
+backend-cpp/build/
+backend-cpp/vcpkg_installed/
+backend-cpp/.cache/
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# ── Python & LangGraph ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+.venv/
+env/
+.env/
+
+# ── Environment Variables & Secrets ──────────────────────────────
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.key
+credentials.json
+
+# ── IDEs & OS Files ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Large Files & Additional Builds ──────────────────────────────
+helloworld/build/
+*.zip
+*.tar.gz
+*.sqlite3
+*.db
+*.mp4
+*.log

@@ -1,0 +1,25 @@
+# DrawFusion AI Service — Python gRPC Server + LangChain/LangGraph Agents
+
+# ── Core gRPC ────────────────────────────────────────────────────
+grpcio==1.68.1
+grpcio-tools==1.68.1
+grpcio-reflection==1.68.1
+grpcio-health-checking==1.68.1
+protobuf==5.29.2
+
+# ── Agent Framework ──────────────────────────────────────────────
+langchain>=0.3.14
+langchain-core>=0.3.28
+langchain-community>=0.3.14
+langchain-ollama>=0.3.0
+langgraph>=0.2.60
+
+# ── Utilities ────────────────────────────────────────────────────
+pydantic>=2.10.0
+python-dotenv>=1.0.1
+
+# ── AI / ML (uncomment when swapping mock → real models) ─────────
+# open-clip-torch==2.29.0
+# torch==2.5.1
+# pillow==11.0.0
+# transformers==4.47.0
