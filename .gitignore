@@ -67,3 +67,6 @@ helloworld/build/
 *.db
 *.mp4
 *.log
+walkthrough.md
+database/
+implementation_plan.md.resolved

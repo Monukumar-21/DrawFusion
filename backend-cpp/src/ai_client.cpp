@@ -121,51 +121,57 @@ std::optional<std::tuple<std::string, std::string>> GameMasterClient::GetPrompt(
     return std::nullopt;
 }
 
-// ── JudgeDrawing ────────────────────────────────────────────────
+// ── JudgeRoundAsync ───────────────────────────────────────────────
 
-std::optional<std::tuple<float, std::string, float>> GameMasterClient::JudgeDrawing(
-    const std::string& player_id,
+void GameMasterClient::JudgeRoundAsync(
+    const std::string& round_id,
     const std::string& prompt,
-    const std::string& image_base64
+    const std::vector<std::pair<std::string, std::string>>& submissions,
+    std::function<void(std::optional<std::map<std::string, PlayerScore>>)> callback
 ) {
-    drawfusion::JudgeRequest request;
-    request.set_player_id(player_id);
-    request.set_prompt(prompt);
-    request.set_image_base64(image_base64);
+    auto request = std::make_unique<drawfusion::JudgeRoundRequest>();
+    request->set_round_id(round_id);
+    request->set_prompt(prompt);
 
-    for (int attempt = 0; attempt <= config_.max_retries; ++attempt) {
-        drawfusion::JudgeResponse response;
-        auto context = MakeContext();
-
-        // Longer deadline for image processing
-        auto deadline = std::chrono::system_clock::now()
-            + std::chrono::milliseconds(config_.deadline_ms * 2);
-        context->set_deadline(deadline);
-
-        auto status = stub_->JudgeDrawing(context.get(), request, &response);
-
-        if (status.ok()) {
-            spdlog::info("[AI Client] JudgeDrawing: player={} score={:.3f} confidence={:.2f}",
-                player_id, response.score(), response.confidence());
-            return std::make_tuple(response.score(), response.feedback(), response.confidence());
-        }
-
-        LogRpcError("JudgeDrawing", status);
-
-        if (status.error_code() == grpc::StatusCode::UNAVAILABLE ||
-            status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED) {
-            if (attempt < config_.max_retries) {
-                spdlog::warn("[AI Client] Retrying JudgeDrawing ({}/{})",
-                    attempt + 1, config_.max_retries);
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(config_.retry_delay_ms));
-                continue;
-            }
-        }
-        break;
+    for (const auto& [pid, img] : submissions) {
+        auto* sub = request->add_submissions();
+        sub->set_player_id(pid);
+        sub->set_image_base64(img);
     }
 
-    return std::nullopt;
+    auto response = std::make_unique<drawfusion::JudgeRoundResponse>();
+    auto context = MakeContext();
+
+    // Longer deadline for batched image processing
+    auto deadline = std::chrono::system_clock::now()
+        + std::chrono::milliseconds(config_.deadline_ms * 3);
+    context->set_deadline(deadline);
+
+    // Release pointers to pass into the callback, so they live until the RPC completes
+    auto req_ptr = request.release();
+    auto res_ptr = response.release();
+    auto ctx_ptr = context.release();
+
+    stub_->async()->JudgeRound(ctx_ptr, req_ptr, res_ptr,
+        [this, req_ptr, res_ptr, ctx_ptr, cb = std::move(callback)](grpc::Status status) {
+            // Re-take ownership to ensure cleanup
+            std::unique_ptr<drawfusion::JudgeRoundRequest> req_guard(req_ptr);
+            std::unique_ptr<drawfusion::JudgeRoundResponse> res_guard(res_ptr);
+            std::unique_ptr<grpc::ClientContext> ctx_guard(ctx_ptr);
+
+            if (status.ok()) {
+                std::map<std::string, PlayerScore> results;
+                for (const auto& r : res_guard->results()) {
+                    results[r.player_id()] = {r.score(), r.rank(), r.feedback(), r.confidence()};
+                }
+                spdlog::info("[AI Client] JudgeRound completed for round {}: {} scores", 
+                    req_guard->round_id(), results.size());
+                cb(std::move(results));
+            } else {
+                LogRpcError("JudgeRoundAsync", status);
+                cb(std::nullopt);
+            }
+        });
 }
 
 // ── GetHint ─────────────────────────────────────────────────────

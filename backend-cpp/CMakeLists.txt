@@ -21,15 +21,15 @@ find_package(unofficial-uwebsockets CONFIG REQUIRED)
 # nlohmann-json (header-only)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-# libpqxx (PostgreSQL C++ client)
-find_package(libpqxx CONFIG REQUIRED)
-
 # jwt-cpp (header-only JWT library)
 find_package(jwt-cpp CONFIG REQUIRED)
 
 # spdlog + fmt (logging)
 find_package(spdlog CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
+
+# SQLite3 (file-based database — no server needed)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
 
 # ── Proto Compilation ────────────────────────────────────────────
 # Compile game-ai.proto into C++ sources at build time
@@ -93,6 +93,20 @@ target_link_libraries(ai_client PUBLIC
     spdlog::spdlog
 )
 
+# ── Database Manager Library ─────────────────────────────────────
+# Wraps SQLite3 for all database operations (users, lobbies, games, etc.)
+
+add_library(db_manager STATIC
+    src/db_manager.cpp
+)
+target_include_directories(db_manager PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+)
+target_link_libraries(db_manager PUBLIC
+    unofficial::sqlite3::sqlite3
+    spdlog::spdlog
+)
+
 # ── Main Server Binary ──────────────────────────────────────────
 
 add_executable(drawfusion_server
@@ -100,10 +114,10 @@ add_executable(drawfusion_server
 )
 target_link_libraries(drawfusion_server PRIVATE
     ai_client
+    db_manager
     proto_lib
     unofficial::uwebsockets::uwebsockets
     nlohmann_json::nlohmann_json
-    libpqxx::pqxx
     jwt-cpp::jwt-cpp
     spdlog::spdlog
     fmt::fmt
@@ -117,13 +131,24 @@ add_executable(test_libs
 )
 target_link_libraries(test_libs PRIVATE
     ai_client
+    db_manager
     proto_lib
     unofficial::uwebsockets::uwebsockets
     nlohmann_json::nlohmann_json
-    libpqxx::pqxx
     jwt-cpp::jwt-cpp
     spdlog::spdlog
     fmt::fmt
+)
+
+# ── Database Smoke Test Binary ───────────────────────────────────
+# Verifies SQLite + DatabaseManager operations work end-to-end
+
+add_executable(test_db
+    src/test_db.cpp
+)
+target_link_libraries(test_db PRIVATE
+    db_manager
+    spdlog::spdlog
 )
 
 # ── Status Messages ──────────────────────────────────────────────

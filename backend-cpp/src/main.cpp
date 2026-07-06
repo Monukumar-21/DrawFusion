@@ -120,6 +120,39 @@ int main() {
                             ws->send(err.dump(), uWS::OpCode::TEXT);
                         }
                     }
+                    else if (type == "submit_drawing") {
+                        spdlog::info("Received submit_drawing, starting async scoring...");
+                        
+                        // Tell client we are judging
+                        json status_msg = {{"type", "scoring_in_progress"}};
+                        ws->send(status_msg.dump(), uWS::OpCode::TEXT);
+
+                        // Mock batch of submissions
+                        std::vector<std::pair<std::string, std::string>> submissions = {
+                            {"player-1", "mock_base64_data_1"},
+                            {"player-2", "mock_base64_data_2"}
+                        };
+
+                        // Call async without blocking this WebSocket thread
+                        ai_client.JudgeRoundAsync(
+                            "round-001",
+                            "A cat on a skateboard",
+                            submissions,
+                            [](std::optional<std::map<std::string, drawfusion::GameMasterClient::PlayerScore>> results) {
+                                if (results) {
+                                    spdlog::info("✅ Async scoring complete! Got {} results.", results->size());
+                                    for (const auto& [pid, score] : *results) {
+                                        spdlog::info("   - Player: {}, Score: {:.2f}, Rank: {}", 
+                                            pid, score.score, score.rank);
+                                    }
+                                    // Note: Real implementation would use uWS::Loop::defer to safely send 
+                                    // the result back to connected WebSockets from this background thread.
+                                } else {
+                                    spdlog::error("❌ Async scoring failed.");
+                                }
+                            }
+                        );
+                    }
                     else {
                         json echo = {
                             {"type", "echo"},

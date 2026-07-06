@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -70,14 +72,22 @@ public:
         const std::vector<std::string>& past_prompts = {}
     );
 
+    struct PlayerScore {
+        float score;
+        int rank;
+        std::string feedback;
+        float confidence;
+    };
+
     /**
-     * Submit a drawing for judging.
-     * @return {score, feedback, confidence} or nullopt on failure
+     * Submit a batch of drawings for comparative judging asynchronously.
+     * The callback receives a map of player_id -> PlayerScore, or nullopt on failure.
      */
-    std::optional<std::tuple<float, std::string, float>> JudgeDrawing(
-        const std::string& player_id,
+    void JudgeRoundAsync(
+        const std::string& round_id,
         const std::string& prompt,
-        const std::string& image_base64
+        const std::vector<std::pair<std::string, std::string>>& submissions,
+        std::function<void(std::optional<std::map<std::string, PlayerScore>>)> callback
     );
 
     /**

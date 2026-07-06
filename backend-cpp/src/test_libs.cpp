@@ -30,8 +30,8 @@
 #include "game-ai.pb.h"
 #include "game-ai.grpc.pb.h"
 
-// ── 5. libpqxx ──────────────────────────────────────────────────
-#include <pqxx/pqxx>
+// ── 5. SQLite3 ──────────────────────────────────────────────────
+#include <sqlite3.h>
 
 // ── 6. uWebSockets (header check) ──────────────────────────────
 #include <uwebsockets/App.h>
@@ -162,16 +162,11 @@ int main() {
         return "GameMasterClient constructed OK";
     });
 
-    // ── Test 7: libpqxx (compile check) ─────────────────────────
-    run_test("libpqxx (compile)", []() -> std::string {
-        // Just verify we can create a connection string parser
-        // Don't actually connect — PostgreSQL might not be running
-        try {
-            pqxx::connection c{"postgresql://invalid:5432/test"};
-        } catch (const pqxx::broken_connection&) {
-            // Expected — we're not actually connecting
-        }
-        return "libpqxx headers + linking OK (no DB connection attempted)";
+    // ── Test 7: SQLite3 (compile check) ─────────────────────────
+    run_test("SQLite3 (compile)", []() -> std::string {
+        // Verify SQLite3 headers and linking work
+        const char* version = sqlite3_libversion();
+        return fmt::format("SQLite3 v{} — headers + linking OK", version);
     });
 
     // ── Test 8: uWebSockets (compile check) ─────────────────────

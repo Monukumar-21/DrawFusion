@@ -9,8 +9,8 @@ service GameMaster {
   // Generate a creative drawing prompt for a round
   rpc GetPrompt (PromptRequest) returns (PromptResponse) {}
 
-  // Score a player's drawing against the prompt using CLIP
-  rpc JudgeDrawing (JudgeRequest) returns (JudgeResponse) {}
+  // Score a batch of drawings relative to each other and the prompt
+  rpc JudgeRound (JudgeRoundRequest) returns (JudgeRoundResponse) {}
 
   // Get a contextual hint for a struggling player
   rpc GetHint (HintRequest) returns (HintResponse) {}
@@ -35,18 +35,29 @@ message PromptResponse {
   string category = 2;          // e.g. "animal", "vehicle", "landmark"
 }
 
-// ── JudgeDrawing ───────────────────────────────────────────────────
+// ── JudgeRound ─────────────────────────────────────────────────────
 
-message JudgeRequest {
+message PlayerSubmission {
   string player_id = 1;
-  string prompt = 2;
-  string image_base64 = 3;      // PNG canvas export as base64 string
+  string image_base64 = 2;      // PNG canvas export as base64 string
 }
 
-message JudgeResponse {
-  float score = 1;              // 0.0 to 1.0 similarity score
-  string feedback = 2;          // brief judge comment
-  float confidence = 3;         // model confidence in the score
+message JudgeRoundRequest {
+  string round_id = 1;
+  string prompt = 2;
+  repeated PlayerSubmission submissions = 3;
+}
+
+message PlayerResult {
+  string player_id = 1;
+  float score = 2;              // 0.0 to 1.0 comparative score
+  int32 rank = 3;               // 1st, 2nd, etc.
+  string feedback = 4;          // personalized feedback based on comparison
+  float confidence = 5;         // model confidence
+}
+
+message JudgeRoundResponse {
+  repeated PlayerResult results = 1;
 }
 
 // ── GetHint ────────────────────────────────────────────────────────
