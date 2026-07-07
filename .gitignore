@@ -70,3 +70,5 @@ helloworld/build/
 walkthrough.md
 database/
 implementation_plan.md.resolved
+drawfusion.db
+drawfusion.db-*

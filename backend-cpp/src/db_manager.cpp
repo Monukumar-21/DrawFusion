@@ -103,6 +103,8 @@ DatabaseManager::DatabaseManager(const std::string& db_path)
     Execute("PRAGMA journal_mode=WAL");
     // Enable foreign keys (SQLite has them OFF by default!)
     Execute("PRAGMA foreign_keys=ON");
+    // Enable incremental vacuuming to prevent disk bloat
+    Execute("PRAGMA auto_vacuum=INCREMENTAL");
     // Busy timeout: wait 5 seconds if another thread has the lock
     sqlite3_busy_timeout(db_, 5000);
 
@@ -278,6 +280,13 @@ void DatabaseManager::LogError(const std::string& context) {
     spdlog::error("[DB] {} — {}", context, sqlite3_errmsg(db_));
 }
 
+void DatabaseManager::Vacuum() {
+    spdlog::info("[DB] Vacuuming database to reclaim disk space...");
+    if (Execute("PRAGMA incremental_vacuum")) {
+        spdlog::info("[DB] Vacuum complete.");
+    }
+}
+
 
 // ═══════════════════════════════════════════════════════════════════
 //  USER OPERATIONS
@@ -354,6 +363,16 @@ bool DatabaseManager::UserExists(const std::string& email) {
 
     stmt.bind_text(1, email);
     return stmt.step();  // true if a row was found
+}
+
+int DatabaseManager::GetUserCount() {
+    StmtGuard stmt(db_, "SELECT COUNT(*) FROM users");
+    if (!stmt.ok()) return 0;
+    
+    if (stmt.step()) {
+        return stmt.col_int(0);
+    }
+    return 0;
 }
 
 
@@ -491,6 +510,16 @@ int DatabaseManager::ExpireStaleLobbies() {
         return count;
     }
 
+    return 0;
+}
+
+int DatabaseManager::GetActiveLobbyCount() {
+    StmtGuard stmt(db_, "SELECT COUNT(*) FROM lobbies WHERE status IN ('waiting', 'active')");
+    if (!stmt.ok()) return 0;
+    
+    if (stmt.step()) {
+        return stmt.col_int(0);
+    }
     return 0;
 }
 

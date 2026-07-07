@@ -56,6 +56,11 @@ public:
      */
     bool IsOpen() const;
 
+    /**
+     * Reclaims unused disk space by running the SQLite VACUUM command.
+     */
+    void Vacuum();
+
     // ══════════════════════════════════════════════════════════════
     //  USER OPERATIONS
     // ══════════════════════════════════════════════════════════════
@@ -84,6 +89,11 @@ public:
      * Check if a user with this email already exists.
      */
     bool UserExists(const std::string& email);
+
+    /**
+     * Get the total number of registered users.
+     */
+    int GetUserCount();
 
     // ══════════════════════════════════════════════════════════════
     //  LOBBY OPERATIONS
@@ -129,6 +139,11 @@ public:
      * @return Number of lobbies expired
      */
     int ExpireStaleLobbies();
+
+    /**
+     * Get the total number of currently active/waiting lobbies.
+     */
+    int GetActiveLobbyCount();
 
     // ══════════════════════════════════════════════════════════════
     //  GAME SESSION OPERATIONS
