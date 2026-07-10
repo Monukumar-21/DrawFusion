@@ -72,3 +72,5 @@ database/
 implementation_plan.md.resolved
 drawfusion.db
 drawfusion.db-*
+backend-cpp/test_drawfusion.db-*
+backend-cpp/drawfusion.db-*

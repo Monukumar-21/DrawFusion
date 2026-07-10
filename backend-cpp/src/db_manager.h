@@ -86,6 +86,16 @@ public:
     std::optional<User> GetUserById(const std::string& id);
 
     /**
+     * Delete a user and cascade delete all their data.
+     */
+    bool DeleteUser(const std::string& id);
+
+    /**
+     * Update a user's password.
+     */
+    bool UpdatePassword(const std::string& id, const std::string& new_password_hash);
+
+    /**
      * Check if a user with this email already exists.
      */
     bool UserExists(const std::string& email);
@@ -128,6 +138,16 @@ public:
      * Get all players in a lobby.
      */
     std::vector<LobbyPlayer> GetLobbyPlayers(const std::string& lobby_id);
+
+    /**
+     * Remove a player from a lobby.
+     */
+    bool RemovePlayerFromLobby(const std::string& lobby_id, const std::string& player_id);
+
+    /**
+     * Delete a lobby entirely.
+     */
+    bool DeleteLobby(const std::string& lobby_id);
 
     /**
      * Update a lobby's status (waiting → started, waiting → expired).
@@ -204,6 +224,11 @@ public:
      * Get all submissions for a round (for ranking/results).
      */
     std::vector<Submission> GetRoundSubmissions(const std::string& round_id);
+
+    /**
+     * Get the user's past drawing submissions and scores.
+     */
+    std::vector<SubmissionHistory> GetRecentSubmissions(const std::string& player_id, int limit = 5);
 
 private:
     sqlite3* db_ = nullptr;      // Raw SQLite3 connection handle

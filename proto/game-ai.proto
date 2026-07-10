@@ -20,6 +20,9 @@ service GameMaster {
 
   // Health check — used by C++ server on startup to verify AI service is reachable
   rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse) {}
+
+  // Validate custom API keys provided by the lobby host
+  rpc ValidateKeys (ValidateKeysRequest) returns (ValidateKeysResponse) {}
 }
 
 // ── GetPrompt ──────────────────────────────────────────────────────
@@ -28,6 +31,7 @@ message PromptRequest {
   string game_id = 1;
   string difficulty = 2;        // "easy", "medium", "hard"
   repeated string past_prompts = 3;  // avoid repeats within a session
+  string custom_groq_key = 4;
 }
 
 message PromptResponse {
@@ -46,6 +50,7 @@ message JudgeRoundRequest {
   string round_id = 1;
   string prompt = 2;
   repeated PlayerSubmission submissions = 3;
+  string custom_groq_key = 4;
 }
 
 message PlayerResult {
@@ -67,6 +72,7 @@ message HintRequest {
   string prompt = 2;
   float time_remaining = 3;     // seconds left in the round
   int32 hint_number = 4;        // which hint (1st, 2nd, 3rd) — gets progressively easier
+  string custom_groq_key = 5;
 }
 
 message HintResponse {
@@ -80,6 +86,7 @@ message FeedbackRequest {
   string prompt = 2;
   string image_base64 = 3;
   float score = 4;              // the score from JudgeDrawing
+  string custom_groq_key = 5;
 }
 
 message FeedbackResponse {
@@ -95,4 +102,15 @@ message HealthCheckRequest {}
 message HealthCheckResponse {
   bool serving = 1;
   string version = 2;
+}
+
+// ── ValidateKeys ───────────────────────────────────────────────────
+
+message ValidateKeysRequest {
+  string groq_key = 1;
+}
+
+message ValidateKeysResponse {
+  bool is_valid = 1;
+  string error_message = 2;
 }

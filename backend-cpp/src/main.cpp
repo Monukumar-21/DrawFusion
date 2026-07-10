@@ -36,8 +36,26 @@ struct PerSocketData {
     std::string username;
     std::string lobby_code;
     bool is_authenticated = false;
+    bool is_ready = false;
     std::chrono::steady_clock::time_point last_action_time;
     std::chrono::steady_clock::time_point last_submit_time;
+};
+
+// ── Lobby Context ───────────────────────────────────────────────
+
+struct LobbyContext {
+    std::unordered_map<std::string, bool> player_ready; // player_id -> is_ready
+    
+    // Round data
+    bool round_active = false;
+    std::string session_id;
+    std::string round_id;
+    std::string prompt;
+    long long end_time_ms = 0;
+    std::vector<std::pair<std::string, std::string>> submissions;
+    std::unordered_map<std::string, std::string> sub_ids; // player_id -> db submission id
+    bool judging_started = false;
+    std::unordered_set<std::string> players_used_hint;
 };
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -122,6 +140,14 @@ int main() {
 
     // ── HTTP Routes (Auth) ──────────────────────────────────────
     
+    // Global CORS preflight handler
+    app.options("/*", [](auto* res, auto* req) {
+        res->writeHeader("Access-Control-Allow-Origin", "*");
+        res->writeHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res->writeHeader("Access-Control-Allow-Headers", "Content-Type");
+        res->end();
+    });
+
     app.post("/api/register", [&db](auto* res, auto* req) {
         res->onAborted([]() {});
         std::string buffer;
@@ -134,25 +160,34 @@ int main() {
                     std::string email = payload.at("email");
                     std::string password = payload.at("password"); // In prod, hash this first!
 
-                    // System capacity limit (portfolio safety constraint)
                     if (db.GetUserCount() >= 12) {
-                        res->writeStatus("403 Forbidden")->end(json{{"error", "System capacity reached (Max 12 users)"}}.dump());
+                        res->writeStatus("403 Forbidden");
+                        res->writeHeader("Access-Control-Allow-Origin", "*");
+                        res->end(json{{"error", "System capacity reached (Max 12 users)"}}.dump());
                         return;
                     }
 
                     if (db.UserExists(email)) {
-                        res->writeStatus("400 Bad Request")->end(json{{"error", "Email already exists"}}.dump());
+                        res->writeStatus("400 Bad Request");
+                        res->writeHeader("Access-Control-Allow-Origin", "*");
+                        res->end(json{{"error", "Email already exists"}}.dump());
                         return;
                     }
 
                     auto user_id = db.CreateUser(username, email, password);
                     if (user_id) {
-                        res->writeStatus("201 Created")->end(json{{"message", "Registered successfully"}}.dump());
+                        res->writeStatus("201 Created");
+                        res->writeHeader("Access-Control-Allow-Origin", "*");
+                        res->end(json{{"message", "Registered successfully"}}.dump());
                     } else {
-                        res->writeStatus("500 Internal Server Error")->end(json{{"error", "DB Error"}}.dump());
+                        res->writeStatus("500 Internal Server Error");
+                        res->writeHeader("Access-Control-Allow-Origin", "*");
+                        res->end(json{{"error", "DB Error"}}.dump());
                     }
                 } catch (const std::exception& e) {
-                    res->writeStatus("400 Bad Request")->end(json{{"error", "Invalid JSON payload"}}.dump());
+                    res->writeStatus("400 Bad Request");
+                    res->writeHeader("Access-Control-Allow-Origin", "*");
+                    res->end(json{{"error", "Invalid JSON payload"}}.dump());
                 }
             }
         });
@@ -179,12 +214,18 @@ int main() {
                             .set_expires_at(std::chrono::system_clock::now() + std::chrono::hours(24))
                             .sign(jwt::algorithm::hs256{JWT_SECRET});
 
+                        res->writeStatus("200 OK");
+                        res->writeHeader("Access-Control-Allow-Origin", "*");
                         res->end(json{{"token", token}, {"username", user->username}, {"id", user->id}}.dump());
                     } else {
-                        res->writeStatus("401 Unauthorized")->end(json{{"error", "Invalid credentials"}}.dump());
+                        res->writeStatus("401 Unauthorized");
+                        res->writeHeader("Access-Control-Allow-Origin", "*");
+                        res->end(json{{"error", "Invalid credentials"}}.dump());
                     }
                 } catch (const std::exception& e) {
-                    res->writeStatus("400 Bad Request")->end(json{{"error", "Invalid JSON payload"}}.dump());
+                    res->writeStatus("400 Bad Request");
+                    res->writeHeader("Access-Control-Allow-Origin", "*");
+                    res->end(json{{"error", "Invalid JSON payload"}}.dump());
                 }
             }
         });
@@ -192,7 +233,92 @@ int main() {
 
     // ── WebSocket Routes (Game) ─────────────────────────────────
 
+    // Global in-memory map for host API keys: lobby_code -> groq_key
+    std::unordered_map<std::string, std::string> lobby_api_keys;
+    
+    // Global in-memory state for active lobbies
+    std::unordered_map<std::string, LobbyContext> active_lobbies;
+    
+    // Global in-memory set for concurrent login tracking
+    std::unordered_set<std::string> active_players;
+
+    // Helper to trigger judging safely
+    auto trigger_scoring = [&db, &ai_client, &lobby_api_keys, &active_lobbies](uWS::App* global_app, const std::string& lobby_code) {
+        auto& ctx = active_lobbies[lobby_code];
+        if (ctx.judging_started || !ctx.round_active) return;
+        ctx.judging_started = true;
+        
+        std::string groq_key = "";
+        if (lobby_api_keys.count(lobby_code)) {
+            groq_key = lobby_api_keys[lobby_code];
+        }
+        
+        uWS::Loop* loop = uWS::Loop::get();
+        std::string topic = "lobby:" + lobby_code;
+        
+        global_app->publish(topic, json{{"type", "scoring_in_progress"}}.dump(), uWS::OpCode::TEXT, false);
+        
+        // Make a copy of submissions for async
+        auto subs = ctx.submissions;
+        auto s_ids = ctx.sub_ids;
+        
+        ai_client.JudgeRoundAsync(ctx.round_id, ctx.prompt, subs, 
+            [loop, global_app, topic, lobby_code, s_ids, &db, &active_lobbies](std::optional<std::map<std::string, drawfusion::GameMasterClient::PlayerScore>> results) {
+                if (results) {
+                    spdlog::info("✅ Async batch scoring complete! Got {} results.", results->size());
+                    json res_json = json::array();
+                    for (const auto& [pid, score] : *results) {
+                        json item;
+                        item["player_id"] = pid; // In production map to username, using pid for now
+                        item["score"] = score.score;
+                        item["rank"] = score.rank;
+                        item["feedback"] = score.feedback;
+                        res_json.push_back(item);
+                        
+                        if (s_ids.count(pid)) {
+                            db.UpdateSubmissionScore(s_ids.at(pid), score.score, score.feedback, score.confidence);
+                        }
+                    }
+                    std::string payload = json{{"type", "judging_results"}, {"results", res_json}}.dump();
+                    loop->defer([global_app, topic, payload, lobby_code, &active_lobbies]() {
+                        global_app->publish(topic, payload, uWS::OpCode::TEXT, false);
+                        active_lobbies[lobby_code].round_active = false;
+                        active_lobbies[lobby_code].judging_started = false;
+                    });
+                } else {
+                    spdlog::error("❌ Batch Scoring failed.");
+                    std::string payload = json{{"type", "error"}, {"message", "Scoring failed"}}.dump();
+                    loop->defer([global_app, topic, payload, lobby_code, &active_lobbies]() {
+                        global_app->publish(topic, payload, uWS::OpCode::TEXT, false);
+                        active_lobbies[lobby_code].round_active = false;
+                        active_lobbies[lobby_code].judging_started = false;
+                    });
+                }
+            }, groq_key);
+    };
+
+    // Helper to evaluate and broadcast lobby ready state
+    auto evaluate_lobby_ready = [&db, &active_lobbies](uWS::App* global_app, const std::string& code) {
+        bool all_ready = true;
+        int active_players = 0;
+        auto lobby = db.GetLobbyByCode(code);
+        if (lobby) {
+            auto players = db.GetLobbyPlayers(lobby->id);
+            active_players = players.size();
+            for (const auto& p : players) {
+                if (!active_lobbies[code].player_ready[p.player_id]) {
+                    all_ready = false;
+                    break;
+                }
+            }
+        }
+        std::string payload_ready = json{{"type", (all_ready && active_players >= 2) ? "all_ready" : "not_all_ready"}}.dump();
+        global_app->publish("lobby:" + code, payload_ready, uWS::OpCode::TEXT, false);
+    };
+
     app.ws<PerSocketData>("/*", {
+        .maxPayloadLength = 16 * 1024 * 1024, // 16MB max payload for large base64 canvas images
+        .idleTimeout = 30,
         .open = [](auto* ws) {
             auto* data = ws->getUserData();
             // Initialize timestamps way in the past so first actions are always allowed
@@ -201,7 +327,7 @@ int main() {
             spdlog::info("Socket connected: {}", ws->getRemoteAddressAsText());
         },
 
-        .message = [&db, &ai_client](auto* ws, std::string_view message, uWS::OpCode opCode) {
+        .message = [&db, &ai_client, global_app = &app, &active_lobbies, &lobby_api_keys, trigger_scoring, &active_players, evaluate_lobby_ready](auto* ws, std::string_view message, uWS::OpCode opCode) {
             auto* data = ws->getUserData();
             
             try {
@@ -219,8 +345,34 @@ int main() {
                         verifier.verify(decoded);
 
                         data->player_id = decoded.get_subject();
+                        
+                        // Verify user still exists in DB
+                        auto user = db.GetUserById(data->player_id);
+                        if (!user) {
+                            ws->send(json{{"type", "error"}, {"message", "Account expired. Please log in again."}}.dump(), uWS::OpCode::TEXT);
+                            ws->send(json{{"type", "account_deleted"}}.dump(), uWS::OpCode::TEXT);
+                            ws->close();
+                            return;
+                        }
+                        
+                        // Concurrent Login Prevention
+                        if (active_players.count(data->player_id)) {
+                            std::string user_topic = "user:" + data->player_id;
+                            global_app->publish(user_topic, json{
+                                {"type", "security_alert"},
+                                {"message", "Security Alert: Someone attempted to log in to your account from another session!"}
+                            }.dump(), uWS::OpCode::TEXT, false);
+                            
+                            ws->send(json{{"type", "error"}, {"message", "Account already logged in elsewhere. Please change your password if this wasn't you."}}.dump(), uWS::OpCode::TEXT);
+                            return;
+                        }
+                        
+                        active_players.insert(data->player_id);
+
                         data->username = decoded.get_payload_claim("username").as_string();
                         data->is_authenticated = true;
+
+                        ws->subscribe("user:" + data->player_id);
 
                         ws->send(json{{"type", "auth_success"}, {"username", data->username}}.dump(), uWS::OpCode::TEXT);
                         spdlog::info("Player authenticated: {}", data->username);
@@ -244,8 +396,44 @@ int main() {
                 }
                 data->last_action_time = now;
 
-                // 2. CREATE LOBBY
+                // 2. DELETE ACCOUNT
+                if (type == "delete_account") {
+                    spdlog::info("Deleting account for player: {}", data->player_id);
+                    if (db.DeleteUser(data->player_id)) {
+                        ws->send(json{{"type", "account_deleted"}}.dump(), uWS::OpCode::TEXT);
+                        ws->close();
+                    } else {
+                        ws->send(json{{"type", "error"}, {"message", "Failed to delete account"}}.dump(), uWS::OpCode::TEXT);
+                    }
+                    return;
+                }
+                
+                // 2.5 CHANGE PASSWORD
+                if (type == "change_password") {
+                    std::string new_password = msg.value("new_password", "");
+                    if (new_password.empty()) {
+                        ws->send(json{{"type", "error"}, {"message", "Password cannot be empty"}}.dump(), uWS::OpCode::TEXT);
+                        return;
+                    }
+                    if (db.UpdatePassword(data->player_id, new_password)) {
+                        ws->send(json{{"type", "password_changed"}}.dump(), uWS::OpCode::TEXT);
+                    } else {
+                        ws->send(json{{"type", "error"}, {"message", "Failed to change password"}}.dump(), uWS::OpCode::TEXT);
+                    }
+                    return;
+                }
+
+                // 3. CREATE LOBBY
                 if (type == "create_lobby") {
+                    std::string groq_key = msg.value("groq_key", "");
+
+                    // Validate API keys
+                    auto err = ai_client.ValidateKeys(groq_key);
+                    if (err) {
+                        ws->send(json{{"type", "error"}, {"message", *err}}.dump(), uWS::OpCode::TEXT);
+                        return;
+                    }
+
                     // System capacity limit (portfolio safety constraint)
                     if (db.GetActiveLobbyCount() >= 3) {
                         ws->send(json{{"type", "error"}, {"message", "System capacity reached (Max 3 active lobbies)"}}.dump(), uWS::OpCode::TEXT);
@@ -258,8 +446,11 @@ int main() {
                     auto lobby_id = db.CreateLobby(data->player_id, code, 4, expires);
                     if (lobby_id) {
                         db.AddPlayerToLobby(*lobby_id, data->player_id);
+                        lobby_api_keys[code] = groq_key;
                         
                         data->lobby_code = code;
+                        active_lobbies[code].player_ready[data->player_id] = false;
+
                         std::string topic = "lobby:" + code;
                         ws->subscribe(topic);
                         
@@ -276,8 +467,24 @@ int main() {
                     auto lobby = db.GetLobbyByCode(code);
                     
                     if (lobby && lobby->status == "waiting") {
+                        auto players = db.GetLobbyPlayers(lobby->id);
+                        if (players.size() >= lobby->max_players) {
+                            ws->send(json{{"type", "error"}, {"message", "Lobby is full"}}.dump(), uWS::OpCode::TEXT);
+                            
+                            // Send join_attempt_full to the Host
+                            std::string host_topic = "user:" + lobby->host_player_id;
+                            global_app->publish(host_topic, json{
+                                {"type", "join_attempt_full"},
+                                {"username", data->username}
+                            }.dump(), uWS::OpCode::TEXT, false);
+                            
+                            return;
+                        }
+
                         if (db.AddPlayerToLobby(lobby->id, data->player_id)) {
                             data->lobby_code = code;
+                            active_lobbies[code].player_ready[data->player_id] = false;
+
                             std::string topic = "lobby:" + code;
                             ws->subscribe(topic);
                             
@@ -287,8 +494,26 @@ int main() {
                                 {"username", data->username}
                             }.dump(), uWS::OpCode::TEXT, false);
 
-                            ws->send(json{{"type", "lobby_joined"}, {"code", code}}.dump(), uWS::OpCode::TEXT);
+                            std::vector<std::string> player_names;
+                            auto host = db.GetUserById(lobby->host_player_id);
+                            if (host) player_names.push_back(host->username);
+                            
+                            auto players = db.GetLobbyPlayers(lobby->id);
+                            for (const auto& p : players) {
+                                if (p.player_id != lobby->host_player_id) {
+                                    auto u = db.GetUserById(p.player_id);
+                                    if (u) player_names.push_back(u->username);
+                                }
+                            }
+
+                            ws->send(json{
+                                {"type", "lobby_joined"}, 
+                                {"code", code},
+                                {"players", player_names}
+                            }.dump(), uWS::OpCode::TEXT);
                             spdlog::info("Player {} joined lobby {}", data->username, code);
+                            
+                            evaluate_lobby_ready(global_app, code);
                         } else {
                             ws->send(json{{"type", "error"}, {"message", "Failed to join (duplicate or full)"}}.dump(), uWS::OpCode::TEXT);
                         }
@@ -297,64 +522,234 @@ int main() {
                     }
                 }
 
+                // 3.5 LEAVE LOBBY
+                else if (type == "leave_lobby") {
+                    if (data->lobby_code.empty()) return;
+                    
+                    std::string code = data->lobby_code;
+                    auto lobby = db.GetLobbyByCode(code);
+                    if (!lobby) return;
+
+                    std::string topic = "lobby:" + code;
+                    
+                    if (lobby->host_player_id == data->player_id) {
+                        // Host leaves: terminate lobby
+                        ws->publish(topic, json{{"type", "lobby_terminated"}}.dump(), uWS::OpCode::TEXT, false);
+                        db.DeleteLobby(lobby->id);
+                        active_lobbies.erase(code);
+                    } else {
+                        // Member leaves
+                        db.RemovePlayerFromLobby(lobby->id, data->player_id);
+                        ws->publish(topic, json{{"type", "player_left"}, {"username", data->username}}.dump(), uWS::OpCode::TEXT, false);
+                        evaluate_lobby_ready(global_app, code);
+                    }
+                    data->lobby_code = "";
+                    ws->send(json{{"type", "left_lobby"}}.dump(), uWS::OpCode::TEXT);
+                    ws->unsubscribe(topic);
+                }
+
+                // 3.6 KICK PLAYER
+                else if (type == "kick_player") {
+                    if (data->lobby_code.empty()) return;
+                    std::string target_username = msg.value("username", "");
+                    std::string code = data->lobby_code;
+                    
+                    auto lobby = db.GetLobbyByCode(code);
+                    if (!lobby || lobby->host_player_id != data->player_id) return; // Only host can kick
+
+                    // Find target player ID by username
+                    auto players = db.GetLobbyPlayers(lobby->id);
+                    std::string target_player_id;
+                    for (const auto& p : players) {
+                        auto u = db.GetUserById(p.player_id);
+                        if (u && u->username == target_username) {
+                            target_player_id = p.player_id;
+                            break;
+                        }
+                    }
+                    if (target_player_id.empty() || target_player_id == data->player_id) return; // Cant kick self
+
+                    // Remove from DB
+                    db.RemovePlayerFromLobby(lobby->id, target_player_id);
+
+                    // Notify the kicked player directly
+                    std::string target_topic = "user:" + target_player_id;
+                    global_app->publish(target_topic, json{{"type", "kicked"}}.dump(), uWS::OpCode::TEXT, false);
+
+                    // Notify the lobby
+                    std::string topic = "lobby:" + code;
+                    global_app->publish(topic, json{{"type", "player_left"}, {"username", target_username}}.dump(), uWS::OpCode::TEXT, false);
+                    evaluate_lobby_ready(global_app, code);
+                }
+
                 // 4. GET PROMPT (AI)
                 else if (type == "get_prompt") {
+                    if (data->lobby_code.empty()) {
+                        ws->send(json{{"type", "error"}, {"message", "Not in a lobby"}}.dump(), uWS::OpCode::TEXT);
+                        return;
+                    }
+
+                    std::string groq_key = "";
+                    if (lobby_api_keys.count(data->lobby_code)) {
+                        groq_key = lobby_api_keys[data->lobby_code];
+                    }
+
                     auto result = ai_client.GetPrompt(
                         msg.value("game_id", "default"),
-                        msg.value("difficulty", "medium")
+                        msg.value("difficulty", "medium"),
+                        {}, groq_key
                     );
                     if (result) {
                         auto [prompt, category] = *result;
+                        
+                        auto now = std::chrono::system_clock::now();
+                        auto end_time = now + std::chrono::seconds(60);
+                        long long end_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count();
+                        
+                        auto& ctx = active_lobbies[data->lobby_code];
+                        ctx.round_active = true;
+                        ctx.judging_started = false;
+                        ctx.prompt = prompt;
+                        ctx.end_time_ms = end_time_ms;
+                        ctx.round_id = generate_lobby_code() + "-round";
+                        ctx.submissions.clear();
+                        ctx.sub_ids.clear();
+                        ctx.players_used_hint.clear();
+                        
+                        // Fix DB constraint issue
+                        auto lobby = db.GetLobbyByCode(data->lobby_code);
+                        if (lobby) {
+                            if (ctx.session_id.empty()) {
+                                auto sess = db.CreateGameSession(lobby->id, "multiplayer");
+                                if (sess) ctx.session_id = *sess;
+                            }
+                            if (!ctx.session_id.empty()) {
+                                db.CreateRound(ctx.session_id, 1, prompt, category, 60);
+                            }
+                        }
+
+                        // Broadcast to everyone
                         json response = {
-                            {"type", "prompt"},
+                            {"type", "round_started"},
                             {"prompt", prompt},
-                            {"category", category}
+                            {"category", category},
+                            {"end_time_ms", end_time_ms}
                         };
-                        ws->send(response.dump(), uWS::OpCode::TEXT);
+                        std::string topic = "lobby:" + data->lobby_code;
+                        std::string payload = response.dump();
+
+                        ws->publish(topic, payload, uWS::OpCode::TEXT, false);
+                        ws->send(payload, uWS::OpCode::TEXT);
+                        
+                        // Unready all players for next round
+                        for (auto& [pid, ready] : ctx.player_ready) {
+                            ready = false;
+                        }
                     } else {
                         ws->send(json{{"type", "error"}, {"message", "AI service unavailable"}}.dump(), uWS::OpCode::TEXT);
                     }
                 }
 
-                // 5. SUBMIT DRAWING (AI BATCH SCORING)
-                else if (type == "submit_drawing") {
-                    // STRICT 60-SECOND COOLDOWN FOR SUBMISSIONS
-                    auto now_submit = std::chrono::steady_clock::now();
-                    if (std::chrono::duration_cast<std::chrono::seconds>(now_submit - data->last_submit_time).count() < 60) {
-                        ws->send(json{{"type", "error"}, {"message", "You can only submit once per round (60 second cooldown)."}}.dump(), uWS::OpCode::TEXT);
+                // 4.5 GET HINT (AI)
+                else if (type == "get_hint") {
+                    if (data->lobby_code.empty()) return;
+                    auto& ctx = active_lobbies[data->lobby_code];
+                    
+                    if (!ctx.round_active) {
+                        ws->send(json{{"type", "error"}, {"message", "No active round!"}}.dump(), uWS::OpCode::TEXT);
                         return;
                     }
-                    data->last_submit_time = now_submit;
-
-                    spdlog::info("Received submit_drawing, starting async scoring...");
                     
-                    // Tell client we are judging
-                    json status_msg = {{"type", "scoring_in_progress"}};
-                    ws->send(status_msg.dump(), uWS::OpCode::TEXT);
+                    if (ctx.players_used_hint.count(data->player_id)) {
+                        ws->send(json{{"type", "error"}, {"message", "You can only request one hint per round to save API limits!"}}.dump(), uWS::OpCode::TEXT);
+                        return;
+                    }
 
-                    // Mock batch of submissions
-                    std::vector<std::pair<std::string, std::string>> submissions = {
-                        {"player-1", "mock_base64_data_1"},
-                        {"player-2", "mock_base64_data_2"}
-                    };
+                    std::string groq_key = "";
+                    if (lobby_api_keys.count(data->lobby_code)) {
+                        groq_key = lobby_api_keys[data->lobby_code];
+                    }
+                    
+                    // Mark hint as used
+                    ctx.players_used_hint.insert(data->player_id);
+                    
+                    // Execute synchronous RPC call to AI service to retrieve hint
+                    // Future enhancement: Move this to async to prevent blocking the WebSocket loop
+                    auto hint_opt = ai_client.GetHint(ctx.round_id, ctx.prompt, 30.0f, 1, groq_key);
+                    if (hint_opt) {
+                        ws->send(json{{"type", "hint_response"}, {"hint", *hint_opt}}.dump(), uWS::OpCode::TEXT);
+                    } else {
+                        // Unmark if it failed so they can try again
+                        ctx.players_used_hint.erase(data->player_id);
+                        ws->send(json{{"type", "error"}, {"message", "Failed to get hint"}}.dump(), uWS::OpCode::TEXT);
+                    }
+                }
 
-                    // Call async without blocking this WebSocket thread
-                    ai_client.JudgeRoundAsync(
-                        "round-001",
-                        "A cat on a skateboard",
-                        submissions,
-                        [](std::optional<std::map<std::string, drawfusion::GameMasterClient::PlayerScore>> results) {
-                            if (results) {
-                                spdlog::info("✅ Async scoring complete! Got {} results.", results->size());
-                                for (const auto& [pid, score] : *results) {
-                                    spdlog::info("   - Player: {}, Score: {:.2f}, Rank: {}", 
-                                        pid, score.score, score.rank);
-                                }
-                            } else {
-                                spdlog::error("❌ Async scoring failed.");
-                            }
-                        }
-                    );
+                // 5. SUBMIT DRAWING (BATCH GATHERING)
+                else if (type == "submit_drawing") {
+                    if (data->lobby_code.empty()) return;
+                    auto& ctx = active_lobbies[data->lobby_code];
+                    if (!ctx.round_active) return;
+                    
+                    std::string b64_image = msg.value("image", "");
+                    
+                    // Save to DB
+                    auto sub_id_opt = db.SaveSubmission(ctx.round_id, data->player_id, b64_image);
+                    
+                    // Add to batch
+                    ctx.submissions.push_back({data->player_id, b64_image});
+                    if (sub_id_opt) {
+                        ctx.sub_ids[data->player_id] = *sub_id_opt;
+                    }
+                    
+                    spdlog::info("Player {} submitted drawing. Total submissions: {}/{}", data->username, ctx.submissions.size(), ctx.player_ready.size());
+                    
+                    ws->send(json{{"type", "scoring_in_progress"}}.dump(), uWS::OpCode::TEXT);
+                    
+                    // Trigger scoring if everyone is done
+                    if (ctx.submissions.size() >= ctx.player_ready.size()) {
+                        trigger_scoring(global_app, data->lobby_code);
+                    }
+                }
+                
+                // 5.5 SET READY
+                else if (type == "set_ready") {
+                    if (data->lobby_code.empty()) return;
+                    bool is_ready = msg.value("ready", true);
+                    data->is_ready = is_ready;
+                    
+                    auto& ctx = active_lobbies[data->lobby_code];
+                    ctx.player_ready[data->player_id] = is_ready;
+                    
+                    std::string topic = "lobby:" + data->lobby_code;
+                    std::string payload = json{
+                        {"type", "player_ready"},
+                        {"username", data->username},
+                        {"ready", is_ready}
+                    }.dump();
+                    
+                    ws->publish(topic, payload, uWS::OpCode::TEXT, false);
+                    ws->send(payload, uWS::OpCode::TEXT);
+                    
+                    ws->send(payload, uWS::OpCode::TEXT);
+                    
+                    evaluate_lobby_ready(global_app, data->lobby_code);
+                }
+
+                // 6. GET HISTORY
+                else if (type == "get_history") {
+                    auto recent = db.GetRecentSubmissions(data->player_id, 5);
+                    json matches = json::array();
+                    for (const auto& sub : recent) {
+                        json item;
+                        item["prompt"] = sub.prompt;
+                        item["score"] = sub.score.has_value() ? sub.score.value() : 0.0f;
+                        item["feedback"] = sub.feedback;
+                        item["image"] = sub.image_base64;
+                        item["date"] = sub.submitted_at;
+                        matches.push_back(item);
+                    }
+                    ws->send(json{{"type", "history_results"}, {"matches", matches}}.dump(), uWS::OpCode::TEXT);
                 }
 
             } catch (const json::parse_error& e) {
@@ -362,18 +757,34 @@ int main() {
             }
         },
 
-        .close = [](auto* ws, int code, std::string_view message) {
+        .close = [&db, &active_lobbies, trigger_scoring, global_app = &app, &active_players, evaluate_lobby_ready](auto* ws, int code, std::string_view message) {
             auto* data = ws->getUserData();
             if (data->is_authenticated) {
-                spdlog::info("Player disconnected: {}", data->username);
+                spdlog::info("Player disconnected, deleting account: {}", data->username);
                 if (!data->lobby_code.empty()) {
+                    std::string lobby_code = data->lobby_code;
+                    
+                    // Remove from lobby context
+                    if (active_lobbies.count(lobby_code)) {
+                        auto& ctx = active_lobbies[lobby_code];
+                        ctx.player_ready.erase(data->player_id);
+                        
+                        // Check if we need to trigger scoring (last player holding up the round)
+                        if (ctx.round_active && ctx.submissions.size() >= ctx.player_ready.size() && !ctx.player_ready.empty()) {
+                            trigger_scoring(global_app, lobby_code);
+                        }
+                    }
+                    
                     // Notify lobby they left
-                    std::string topic = "lobby:" + data->lobby_code;
+                    std::string topic = "lobby:" + lobby_code;
                     ws->publish(topic, json{
                         {"type", "player_left"},
                         {"username", data->username}
                     }.dump(), uWS::OpCode::TEXT, false);
                 }
+                active_players.erase(data->player_id);
+                // Ephemeral accounts: delete user immediately
+                db.DeleteUser(data->player_id);
             }
         }
     });

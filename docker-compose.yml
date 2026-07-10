@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    ports:
+      - "9001:9001"
+    environment:
+      - AI_SERVICE_ADDR=ai-service:50051
+    depends_on:
+      - ai-service
+    networks:
+      - drawfusion-net
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ai
+    ports:
+      - "50051:50051"
+    # We don't set GROQ_API_KEY or HF_API_KEY here because the host provides them
+    networks:
+      - drawfusion-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - drawfusion-net
+
+networks:
+  drawfusion-net:
+    driver: bridge

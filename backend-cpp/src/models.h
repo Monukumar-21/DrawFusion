@@ -94,4 +94,16 @@ struct Submission {
     std::string submitted_at;
 };
 
+// ── SubmissionHistory ───────────────────────────────────────────────
+// Maps to: joined query of submissions + rounds
+// Used for the user's match history view
+
+struct SubmissionHistory {
+    std::string prompt;
+    std::optional<float> score;
+    std::string feedback;
+    std::string image_base64;
+    std::string submitted_at;
+};
+
 } // namespace drawfusion

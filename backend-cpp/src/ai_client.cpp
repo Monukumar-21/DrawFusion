@@ -76,16 +76,41 @@ bool GameMasterClient::IsHealthy() {
     return false;
 }
 
+// ── ValidateKeys ────────────────────────────────────────────────
+
+std::optional<std::string> GameMasterClient::ValidateKeys(const std::string& groq_key) {
+    drawfusion::ValidateKeysRequest request;
+    request.set_groq_key(groq_key);
+
+    drawfusion::ValidateKeysResponse response;
+    auto context = MakeContext();
+
+    auto status = stub_->ValidateKeys(context.get(), request, &response);
+
+    if (status.ok()) {
+        if (response.is_valid()) {
+            return std::nullopt; // No error
+        } else {
+            return response.error_message();
+        }
+    }
+
+    LogRpcError("ValidateKeys", status);
+    return "Failed to contact AI service for validation.";
+}
+
 // ── GetPrompt ───────────────────────────────────────────────────
 
 std::optional<std::tuple<std::string, std::string>> GameMasterClient::GetPrompt(
     const std::string& game_id,
     const std::string& difficulty,
-    const std::vector<std::string>& past_prompts
+    const std::vector<std::string>& past_prompts,
+    const std::string& custom_groq_key
 ) {
     drawfusion::PromptRequest request;
     request.set_game_id(game_id);
     request.set_difficulty(difficulty);
+    if (!custom_groq_key.empty()) request.set_custom_groq_key(custom_groq_key);
     for (const auto& p : past_prompts) {
         request.add_past_prompts(p);
     }
@@ -121,17 +146,62 @@ std::optional<std::tuple<std::string, std::string>> GameMasterClient::GetPrompt(
     return std::nullopt;
 }
 
+// ── JudgeRound ───────────────────────────────────────────────
+
+std::optional<std::map<std::string, GameMasterClient::PlayerScore>> GameMasterClient::JudgeRound(
+    const std::string& round_id,
+    const std::string& prompt,
+    const std::vector<std::pair<std::string, std::string>>& submissions,
+    const std::string& custom_groq_key
+) {
+    drawfusion::JudgeRoundRequest request;
+    request.set_round_id(round_id);
+    request.set_prompt(prompt);
+    if (!custom_groq_key.empty()) request.set_custom_groq_key(custom_groq_key);
+
+    for (const auto& [pid, img] : submissions) {
+        auto* sub = request.add_submissions();
+        sub->set_player_id(pid);
+        sub->set_image_base64(img);
+    }
+
+    drawfusion::JudgeRoundResponse response;
+    auto context = MakeContext();
+    
+    // Longer deadline for batched image processing
+    auto deadline = std::chrono::system_clock::now()
+        + std::chrono::milliseconds(config_.deadline_ms * 3);
+    context->set_deadline(deadline);
+
+    auto status = stub_->JudgeRound(context.get(), request, &response);
+
+    if (status.ok()) {
+        std::map<std::string, PlayerScore> results;
+        for (const auto& r : response.results()) {
+            results[r.player_id()] = {r.score(), r.rank(), r.feedback(), r.confidence()};
+        }
+        spdlog::info("[AI Client] JudgeRound completed for round {}: {} scores", 
+            round_id, results.size());
+        return results;
+    }
+
+    LogRpcError("JudgeRound", status);
+    return std::nullopt;
+}
+
 // ── JudgeRoundAsync ───────────────────────────────────────────────
 
 void GameMasterClient::JudgeRoundAsync(
     const std::string& round_id,
     const std::string& prompt,
     const std::vector<std::pair<std::string, std::string>>& submissions,
-    std::function<void(std::optional<std::map<std::string, PlayerScore>>)> callback
+    std::function<void(std::optional<std::map<std::string, PlayerScore>>)> callback,
+    const std::string& custom_groq_key
 ) {
     auto request = std::make_unique<drawfusion::JudgeRoundRequest>();
     request->set_round_id(round_id);
     request->set_prompt(prompt);
+    if (!custom_groq_key.empty()) request->set_custom_groq_key(custom_groq_key);
 
     for (const auto& [pid, img] : submissions) {
         auto* sub = request->add_submissions();
@@ -180,13 +250,15 @@ std::optional<std::string> GameMasterClient::GetHint(
     const std::string& game_id,
     const std::string& prompt,
     float time_remaining,
-    int hint_number
+    int hint_number,
+    const std::string& custom_groq_key
 ) {
     drawfusion::HintRequest request;
     request.set_game_id(game_id);
     request.set_prompt(prompt);
     request.set_time_remaining(time_remaining);
     request.set_hint_number(hint_number);
+    if (!custom_groq_key.empty()) request.set_custom_groq_key(custom_groq_key);
 
     drawfusion::HintResponse response;
     auto context = MakeContext();

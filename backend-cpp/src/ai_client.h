@@ -63,13 +63,20 @@ public:
     // ── RPCs ────────────────────────────────────────────────────
 
     /**
+     * Validate custom API keys against the AI service.
+     * @return nullopt if valid, or error message if invalid.
+     */
+    std::optional<std::string> ValidateKeys(const std::string& groq_key);
+
+    /**
      * Request a drawing prompt from the AI service.
      * @return {prompt, category} or nullopt on failure
      */
     std::optional<std::tuple<std::string, std::string>> GetPrompt(
         const std::string& game_id,
         const std::string& difficulty = "medium",
-        const std::vector<std::string>& past_prompts = {}
+        const std::vector<std::string>& past_prompts = {},
+        const std::string& custom_groq_key = ""
     );
 
     struct PlayerScore {
@@ -80,6 +87,17 @@ public:
     };
 
     /**
+     * Submit a batch of drawings for comparative judging synchronously.
+     * @return map of player_id -> PlayerScore, or nullopt on failure.
+     */
+    std::optional<std::map<std::string, PlayerScore>> JudgeRound(
+        const std::string& round_id,
+        const std::string& prompt,
+        const std::vector<std::pair<std::string, std::string>>& submissions,
+        const std::string& custom_groq_key = ""
+    );
+
+    /**
      * Submit a batch of drawings for comparative judging asynchronously.
      * The callback receives a map of player_id -> PlayerScore, or nullopt on failure.
      */
@@ -87,7 +105,8 @@ public:
         const std::string& round_id,
         const std::string& prompt,
         const std::vector<std::pair<std::string, std::string>>& submissions,
-        std::function<void(std::optional<std::map<std::string, PlayerScore>>)> callback
+        std::function<void(std::optional<std::map<std::string, PlayerScore>>)> callback,
+        const std::string& custom_groq_key = ""
     );
 
     /**
@@ -98,7 +117,8 @@ public:
         const std::string& game_id,
         const std::string& prompt,
         float time_remaining,
-        int hint_number = 1
+        int hint_number = 1,
+        const std::string& custom_groq_key = ""
     );
 
     /**

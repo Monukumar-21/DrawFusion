@@ -12,14 +12,10 @@ langchain>=0.3.14
 langchain-core>=0.3.28
 langchain-community>=0.3.14
 langchain-ollama>=0.3.0
+langchain-groq>=0.2.0
 langgraph>=0.2.60
 
 # ── Utilities ────────────────────────────────────────────────────
 pydantic>=2.10.0
 python-dotenv>=1.0.1
-
-# ── AI / ML (uncomment when swapping mock → real models) ─────────
-# open-clip-torch==2.29.0
-# torch==2.5.1
-# pillow==11.0.0
-# transformers==4.47.0
+requests>=2.31.0

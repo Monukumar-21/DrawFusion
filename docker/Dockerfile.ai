@@ -1,0 +1,16 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Copy requirements and install
+COPY ai-service/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source code
+COPY ai-service/ ./
+
+# Expose gRPC port
+EXPOSE 50051
+
+# Run the AI server
+CMD ["python", "server.py"]

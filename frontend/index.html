@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DrawFusion - Multiplayer Drawing Challenge</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/index.css">
+</head>
+<body>
+    <div id="particles-bg"></div>
+
+    <div class="app-container">
+        <!-- Auth Screen -->
+        <section id="auth-screen" class="screen active glass-panel">
+            <h1 class="logo-title">Draw<span class="gradient-text">Fusion</span></h1>
+            <p class="subtitle">An AI-Judged Drawing Battle</p>
+            
+            <div class="auth-note">
+                <small><em>*Note: Because of database constraints and lobby management, you must re-register every time you play.*</em></small>
+            </div>
+            
+            <div class="auth-tabs">
+                <button class="tab-btn active" id="tab-login">Login</button>
+                <button class="tab-btn" id="tab-register">Register</button>
+            </div>
+            
+            <form id="auth-form" class="auth-form">
+                <input type="text" id="username" placeholder="Username" required>
+                <input type="password" id="password" placeholder="Password" required>
+                <button type="submit" class="btn-primary" id="auth-submit">Enter Game</button>
+            </form>
+            <p id="auth-error" class="error-msg"></p>
+        </section>
+
+        <!-- Main Menu Screen -->
+        <section id="menu-screen" class="screen glass-panel">
+            <h2 class="section-title">Welcome, <span id="welcome-user" class="gradient-text">Player</span></h2>
+            
+            <div class="menu-actions">
+                <div class="host-keys-box" style="margin-bottom: 1rem;">
+                    <h4 style="color: var(--text-secondary); margin-bottom: 0.5rem; font-size: 0.9rem;">Lobby Host API Keys (Optional)</h4>
+                    <input type="password" id="host-groq-key" placeholder="Gemini API Key (for LLM and AI Judge)">
+                </div>
+                <button id="btn-create-lobby" class="btn-primary lg">Create New Lobby</button>
+                
+                <div class="join-box">
+                    <input type="text" id="join-code" placeholder="Lobby Code">
+                    <button id="btn-join-lobby" class="btn-secondary">Join Lobby</button>
+                </div>
+                <button id="btn-match-history" class="btn-secondary lg mt-4">Match History</button>
+                <button id="btn-change-password" class="btn-secondary mt-4">Change Password</button>
+                <button id="btn-delete-account" class="btn-secondary mt-4 btn-danger">Delete Account</button>
+            </div>
+        </section>
+
+        <!-- Lobby Room Screen -->
+        <section id="lobby-screen" class="screen glass-panel">
+            <button id="btn-leave-lobby" class="btn-back">← Back to Menu</button>
+            <div class="lobby-header">
+                <h2>Lobby: <span id="lobby-id-display" class="gradient-text"></span></h2>
+            </div>
+            
+            <div class="player-list-container">
+                <h3>Players (<span id="player-count">0</span>/4)</h3>
+                <ul id="player-list" class="player-list">
+                    <!-- Players injected here -->
+                </ul>
+            </div>
+            
+            <div class="host-controls">
+                <button id="btn-ready" class="btn-secondary lg" style="margin-right: 10px;">Ready!</button>
+                <button id="btn-start-game" class="btn-primary lg" style="display: none;" disabled>Start Game</button>
+                <p id="waiting-msg">Waiting for players to be ready...</p>
+            </div>
+        </section>
+
+        <!-- Game Screen -->
+        <section id="game-screen" class="screen">
+            <div class="game-header glass-panel-sm">
+                <button id="btn-quit-game" class="btn-back">← Quit</button>
+                <div class="prompt-box">
+                    <h3>Draw this:</h3>
+                    <h2 id="current-prompt" class="gradient-text">Waiting for prompt...</h2>
+                </div>
+                <div class="timer-box">
+                    <span id="game-timer">60</span>s
+                </div>
+            </div>
+            
+            <div class="canvas-container glass-panel">
+                <canvas id="drawing-canvas"></canvas>
+                
+                <div class="tools-panel">
+                    <input type="color" id="color-picker" value="#ffffff">
+                    <input type="range" id="brush-size" min="1" max="20" value="5">
+                    <button id="btn-clear" class="btn-tool">Clear</button>
+                    <button id="btn-hint" class="btn-tool">Get Hint</button>
+                </div>
+            </div>
+            
+            <div id="hint-display" class="hint-box"></div>
+            
+            <button id="btn-submit-drawing" class="btn-primary lg pulse">Submit Drawing</button>
+        </section>
+
+        <!-- Results Screen -->
+        <section id="results-screen" class="screen glass-panel">
+            <h2 class="section-title">Round <span class="gradient-text">Results</span></h2>
+            
+            <div id="leaderboard" class="leaderboard">
+                <!-- Results injected here -->
+            </div>
+            
+            <div class="results-actions mt-4">
+                <button id="btn-next-round" class="btn-primary">Next Round</button>
+                <button id="btn-results-menu" class="btn-secondary">Return to Menu</button>
+            </div>
+        </section>
+
+        <!-- Match History Screen -->
+        <section id="history-screen" class="screen glass-panel">
+            <h2 class="section-title">Match <span class="gradient-text">History</span></h2>
+            
+            <div id="history-list" class="history-list">
+                <!-- Matches injected here -->
+            </div>
+            
+            <button id="btn-back-menu" class="btn-secondary mt-4">Back to Menu</button>
+        </section>
+        
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="overlay">
+            <div class="spinner"></div>
+            <p id="loading-text">Connecting...</p>
+        </div>
+
+        <!-- AI Processing Overlay -->
+        <div id="ai-loading-overlay" class="overlay ai-overlay">
+            <div class="ai-brain-container">
+                <div class="ai-brain-core"></div>
+                <div class="ai-brain-ring"></div>
+                <div class="ai-scanline"></div>
+            </div>
+            <h3 class="gradient-text ai-pulse-text">AI is Judging...</h3>
+            <p class="ai-subtext">Analyzing your masterpiece...</p>
+        </div>
+    </div>
+
+    <script src="js/canvas.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

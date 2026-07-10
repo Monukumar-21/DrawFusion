@@ -1,0 +1,56 @@
+FROM ubuntu:24.04
+
+# Avoid timezone prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build tools and dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc-13 \
+    g++-13 \
+    cmake \
+    git \
+    curl \
+    zip \
+    unzip \
+    tar \
+    pkg-config \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set GCC-13 as default
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+
+# Install vcpkg
+WORKDIR /opt
+RUN git clone https://github.com/microsoft/vcpkg.git
+WORKDIR /opt/vcpkg
+RUN ./bootstrap-vcpkg.sh -disableMetrics
+
+# Set up the app directory
+WORKDIR /app
+
+# Copy the vcpkg.json and configuration first to cache the vcpkg dependencies
+COPY backend-cpp/vcpkg.json backend-cpp/vcpkg-configuration.json ./
+
+# Install dependencies (this might take a while on the first build)
+ENV VCPKG_FORCE_SYSTEM_BINARIES=1
+RUN /opt/vcpkg/vcpkg install --triplet x64-linux
+
+# Copy the source code
+COPY backend-cpp/CMakeLists.txt ./
+COPY backend-cpp/src ./src
+
+# Build the project
+RUN cmake -B build \
+    -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja
+RUN cmake --build build -j$(nproc)
+
+# Expose WebSocket port
+EXPOSE 9001
+
+# Run the server
+CMD ["./build/drawfusion_server"]

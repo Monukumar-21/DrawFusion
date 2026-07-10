@@ -357,6 +357,37 @@ std::optional<User> DatabaseManager::GetUserById(const std::string& id) {
     return std::nullopt;
 }
 
+bool DatabaseManager::DeleteUser(const std::string& id) {
+    StmtGuard stmt(db_, "DELETE FROM users WHERE id = ?");
+    if (!stmt.ok()) return false;
+
+    stmt.bind_text(1, id);
+
+    if (stmt.exec()) {
+        spdlog::info("[DB] Deleted user: {}", id);
+        return true;
+    }
+
+    LogError("DeleteUser");
+    return false;
+}
+
+bool DatabaseManager::UpdatePassword(const std::string& id, const std::string& new_password_hash) {
+    StmtGuard stmt(db_, "UPDATE users SET password_hash = ? WHERE id = ?");
+    if (!stmt.ok()) return false;
+
+    stmt.bind_text(1, new_password_hash);
+    stmt.bind_text(2, id);
+
+    if (stmt.exec()) {
+        spdlog::info("[DB] Updated password for user: {}", id);
+        return true;
+    }
+
+    LogError("UpdatePassword");
+    return false;
+}
+
 bool DatabaseManager::UserExists(const std::string& email) {
     StmtGuard stmt(db_, "SELECT 1 FROM users WHERE email = ?");
     if (!stmt.ok()) return false;
@@ -477,6 +508,29 @@ std::vector<LobbyPlayer> DatabaseManager::GetLobbyPlayers(const std::string& lob
     }
 
     return players;
+}
+
+bool DatabaseManager::RemovePlayerFromLobby(const std::string& lobby_id, const std::string& player_id) {
+    StmtGuard stmt(db_, "DELETE FROM lobby_players WHERE lobby_id = ? AND player_id = ?");
+    if (!stmt.ok()) return false;
+    stmt.bind_text(1, lobby_id);
+    stmt.bind_text(2, player_id);
+    if (stmt.exec()) {
+        spdlog::info("[DB] Player {} removed from lobby {}", player_id, lobby_id);
+        return true;
+    }
+    return false;
+}
+
+bool DatabaseManager::DeleteLobby(const std::string& lobby_id) {
+    StmtGuard stmt(db_, "DELETE FROM lobbies WHERE id = ?");
+    if (!stmt.ok()) return false;
+    stmt.bind_text(1, lobby_id);
+    if (stmt.exec()) {
+        spdlog::info("[DB] Lobby {} deleted", lobby_id);
+        return true;
+    }
+    return false;
 }
 
 bool DatabaseManager::UpdateLobbyStatus(const std::string& lobby_id, const std::string& status) {
@@ -686,6 +740,37 @@ std::vector<Submission> DatabaseManager::GetRoundSubmissions(const std::string& 
     }
 
     return submissions;
+}
+
+std::vector<SubmissionHistory> DatabaseManager::GetRecentSubmissions(const std::string& player_id, int limit) {
+    std::vector<SubmissionHistory> history;
+
+    StmtGuard stmt(db_,
+        "SELECT r.prompt, s.score, s.feedback, s.image_base64, s.submitted_at "
+        "FROM submissions s "
+        "JOIN rounds r ON s.round_id = r.id "
+        "WHERE s.player_id = ? "
+        "ORDER BY s.submitted_at DESC "
+        "LIMIT ?");
+    
+    if (!stmt.ok()) return history;
+
+    stmt.bind_text(1, player_id);
+    stmt.bind_int(2, limit);
+
+    while (stmt.step()) {
+        SubmissionHistory sh;
+        sh.prompt       = stmt.col_text(0);
+        if (sqlite3_column_type(stmt.get(), 1) != SQLITE_NULL) {
+            sh.score = static_cast<float>(stmt.col_double(1));
+        }
+        sh.feedback     = stmt.col_text(2);
+        sh.image_base64 = stmt.col_text(3);
+        sh.submitted_at = stmt.col_text(4);
+        history.push_back(sh);
+    }
+
+    return history;
 }
 
 } // namespace drawfusion

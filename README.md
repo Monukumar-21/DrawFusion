@@ -1,84 +1,120 @@
-# DrawFusion
+<div align="center">
+  <img src="https://via.placeholder.com/150" alt="DrawFusion Logo" width="150"/>
+  <h1>🎨 DrawFusion</h1>
+  <p><strong>A blazing-fast, AI-judged, real-time multiplayer drawing game built with C++ and Google Gemini.</strong></p>
+</div>
 
-**⚡ A high-performance, AI-driven multiplayer drawing experience powered by C++ and Python.**
+---
 
-DrawFusion is a distributed multiplayer system that combines a lightning-fast C++ backend with a Python-based AI microservice. Players join lobbies, receive AI-generated drawing prompts, and compete by drawing on a canvas, while an intelligent AI agent evaluates their submissions in real-time.
+## 📖 Overview
 
-## Why This Project? (My Learning Journey)
+DrawFusion is a fully distributed multiplayer drawing game where players join a lobby, receive quirky AI-generated prompts, and race against the clock to draw the best interpretation. What makes DrawFusion unique is the **AI Art Judge**—a Google Gemini-powered agent that natively "looks" at your canvas, calculates a visual similarity score against the prompt, and delivers hilariously chaotic, personalized feedback to every player.
 
-DrawFusion is not just a game; it is my hands-on deep dive into distributed systems engineering. By choosing to build the core game server in C++ rather than a more forgiving environment like Node.js, I set out to master:
-- **Low-Level Resource Management**: Avoiding memory leaks using RAII patterns (like my custom `StmtGuard` for SQLite) instead of relying on a garbage collector.
-- **Asynchronous Networking**: Implementing non-blocking WebSocket architectures and asynchronous gRPC callback pipelines to prevent thread starvation during heavy ML workloads.
-- **Microservice Interoperability**: Bridging the gap between a high-performance C++ core and a Python-based ML ecosystem, mimicking how enterprise applications scale AI workflows.
-- **Modern Build Systems**: Conquering the steep learning curve of `CMake` and `vcpkg` to manage heavy dependencies like gRPC and Protobuf in a C++20 environment.
+Built to be exceptionally lightweight and ultra-performant, DrawFusion uses a custom **C++20 WebSocket server** to handle network synchronization, embedded SQLite for persistent storage, and a decoupled Python microservice for AI inference. 
 
-## Key Features
+## 🏗️ System Architecture
 
-- **Distributed Architecture**: Separation of concerns between high-speed game logic (C++) and complex ML inference (Python).
-- **Language Interoperability**: Seamless, high-speed gRPC communication between the C++ performance core and the Python AI service.
-- **Robust Persistence**: Zero-config, file-based SQLite database with a custom C++ wrapper for fast, memory-safe data management.
-- **Real-Time Multiplayer**: Low-latency WebSocket integration capable of handling real-time multiplayer matchmaking and game state synchronization.
-- **Active AI Participant**: An AI agent capable of generating creative drawing prompts, analyzing the game state, scoring player drawings, and providing constructive feedback.
+DrawFusion follows a high-performance, minimalist microservices architecture designed to minimize latency while entirely abstracting the heavy LLM tasks away from the core game engine.
 
-## System Architecture
+```mermaid
+graph TD
+    Client[Web Client<br>Vanilla JS/HTML5]
+    Nginx[Nginx Reverse Proxy]
+    GameServer[Game Engine<br>C++20, uWebSockets]
+    SQLite[(SQLite Database)]
+    AIService[AI Microservice<br>Python 3.10, gRPC]
+    Gemini[Google Gemini API<br>1.5-Flash Vision]
 
-The project is structured around a microservices pattern:
+    Client -- HTTP/WS --> Nginx
+    Nginx -- WS --> GameServer
+    GameServer -- SQL --> SQLite
+    GameServer -- gRPC --> AIService
+    AIService -- REST --> Gemini
+```
 
-1. **Frontend (Planned)**: A web-based canvas UI.
-2. **C++ Game Server**: Handles real-time WebSocket connections, lobby management, game state, and database interactions. Built for raw performance and scalability.
-3. **Python AI Service**: A gRPC server running LangChain/LangGraph agents and ML models (like CLIP) to handle prompt generation and drawing evaluation.
+### Core Components
+1. **Frontend (Vanilla JS/HTML5)**: A highly interactive, zero-dependency browser client. Handles real-time canvas rendering, lobby state UI synchronization, and WebSocket orchestration.
+2. **Game Engine (`backend-cpp`)**: The heart of the application. Written in modern C++20 utilizing `uWebSockets` for blistering fast concurrent network I/O. It orchestrates lobby synchronization, manages SQLite schema enforcement, and calculates absolute UTC timers for anti-cheat synchronization.
+3. **AI Microservice (`ai-service`)**: A Python-based gRPC server that acts as a bridge to the Google Gemini API. By decoupling the AI logic via gRPC, the C++ engine never blocks while waiting for the LLM to analyze images.
 
-## Current Milestones Completed
+## ✨ Key Features
 
-### 1. C++ Build System & Environment
-- Established a robust C++20 build pipeline using **CMake** and **vcpkg** (manifest mode).
-- Successfully integrated 8 core dependencies, including gRPC, Protobuf, uWebSockets, and SQLite3.
+- **Google Gemini Integration**: 100% powered by `gemini-1.5-flash`. The API naturally handles text-generation for quirky prompts and hints, as well as multimodal vision-inference to actively judge the final canvas drawings.
+- **BYOK (Bring Your Own Key)**: To keep hosting completely free, the lobby Host simply drops in a single Google Gemini API key during lobby creation. The server securely holds this in volatile memory to power the AI for that specific lobby session.
+- **Strict Lobby Administration**: Only the Host can start the game, and only when all present players explicitly hit "Ready". The Host also holds the power to kick AFK or disruptive players.
+- **API Rate Limit Protections**: The server physically blocks spam. For example, players are hard-capped at exactly **1 Hint per round**, ensuring your free Gemini tier is never exhausted.
+- **Anti-Ghosting Logic**: If the host leaves or disconnects, the C++ server instantly broadcasts a termination signal, safely wiping the lobby and kicking all players back to the main menu.
+- **Ephemeral State**: Player accounts are tied to their active WebSocket connection. When they disconnect, their session, canvas data, and credentials are wiped from the SQLite database to preserve storage space.
 
-### 2. gRPC Microservice Integration
-- Defined the system contract in `game-ai.proto` with 5 distinct RPCs.
-- Implemented a resilient C++ `GameMasterClient` that auto-generates stubs, handles timeouts, and ensures graceful degradation if the AI service goes offline.
+---
 
-### 3. Database Layer (SQLite3)
-- Implemented a full relational schema covering Users, Lobbies, Game Sessions, Rounds, and Submissions.
-- Built a custom `DatabaseManager` in C++ with parameterized queries to prevent SQL injection.
-- Utilized RAII patterns (`StmtGuard`) for automatic memory management of SQLite statements, preventing memory leaks.
-- Replaced legacy PostgreSQL dependencies with a lightweight, embedded SQLite3 engine for simplified deployment.
+## 🚀 Getting Started (Live Demo)
 
-### 4. WebSocket Server
-- Integrated `uWebSockets` to manage high-throughput, real-time client communication.
-- Implemented JSON-based message routing with graceful error handling and signal-based shutdown.
-
-## Getting Started
+If you want to host this game yourself for free and play with friends online, you can run it locally and tunnel it to the internet!
 
 ### Prerequisites
-- GCC (13.3.0+) or equivalent C++20 compiler
-- CMake (3.20+)
+- Docker and Docker Compose
+- A free [Google Gemini API Key](https://aistudio.google.com/app/apikey)
+- A free Ngrok account (for tunneling)
+
+### 1. Launch the Server Stack
+Clone the repository and spin up the Docker containers. The C++ engine and Python microservice will automatically compile and link.
+```bash
+docker-compose up --build -d
+```
+*(Note: The first build will take a few minutes as vcpkg compiles the C++ networking libraries from source).*
+
+### 2. Tunnel to the Internet
+To let your friends join, expose your local Docker container (port 80) to the public internet using Ngrok:
+```bash
+ngrok http 80
+```
+
+### 3. Play!
+1. Copy the secure `https://....ngrok-free.app` URL provided by your terminal.
+2. Send that URL to your friends!
+3. Open the URL yourself, enter a username, click **Create New Lobby**, paste your Google Gemini API Key, and share the 6-letter lobby code with your friends!
+
+---
+
+## 🛠️ Local Development (Building from Source)
+
+If you wish to contribute or modify the C++ engine directly without Docker:
+
+### Prerequisites
+- GCC 13.3+ (or equivalent C++20 compiler)
+- CMake 3.20+
 - vcpkg
-- Python 3.10+ (for the AI service)
+- Python 3.10+
 
-### Building the Server
-
+### Building the C++ Server
 ```bash
 cd backend-cpp
-# Configure the build system (using vcpkg toolchain)
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release
-# Compile the project
 cmake --build build -j$(nproc)
 ```
 
-### Running Tests
+### Running the Services
+You must run all three components concurrently for the system to function.
 
+**1. AI Microservice** (Terminal 1)
+```bash
+cd ai-service
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 server.py
+```
+
+**2. Game Engine** (Terminal 2)
 ```bash
 cd backend-cpp
-# Verify database operations (CRUD, schema migration, UUID generation)
-./build/test_db
-# Verify library integration (gRPC, SQLite, JSON, JWT, etc.)
-./build/test_libs
+./build/drawfusion_server
 ```
 
-### Starting the Server
-
+**3. Frontend Client** (Terminal 3)
 ```bash
-./backend-cpp/build/drawfusion_server
+cd frontend
+python3 -m http.server 5500
 ```
-*Note: The server will start on WebSocket port 9001 and attempt to connect to the AI gRPC service on port 50051.*
+Navigate to `http://localhost:5500` in your browser.
