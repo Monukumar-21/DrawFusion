@@ -56,6 +56,9 @@ struct LobbyContext {
     std::unordered_map<std::string, std::string> sub_ids; // player_id -> db submission id
     bool judging_started = false;
     std::unordered_set<std::string> players_used_hint;
+    
+    // Peeking mechanism
+    std::unordered_map<std::string, std::unordered_set<std::string>> peekers_of; // target_username -> set of peeker_usernames
 };
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -78,6 +81,20 @@ std::string get_future_datetime(int hours) {
     char buf[100];
     std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", std::gmtime(&time));
     return std::string(buf);
+}
+
+std::string getPlayerIdByUsernameInLobby(drawfusion::DatabaseManager& db, const std::string& lobby_code, const std::string& username) {
+    auto lobby = db.GetLobbyByCode(lobby_code);
+    if (lobby) {
+        auto players = db.GetLobbyPlayers(lobby->id);
+        for (const auto& p : players) {
+            auto u = db.GetUserById(p.player_id);
+            if (u && u->username == username) {
+                return p.player_id;
+            }
+        }
+    }
+    return "";
 }
 
 // ── Signal Handling ─────────────────────────────────────────────
@@ -263,7 +280,7 @@ int main() {
         auto s_ids = ctx.sub_ids;
         
         ai_client.JudgeRoundAsync(ctx.round_id, ctx.prompt, subs, 
-            [loop, global_app, topic, lobby_code, s_ids, &db, &active_lobbies](std::optional<std::map<std::string, drawfusion::GameMasterClient::PlayerScore>> results) {
+            [loop, global_app, topic, lobby_code, s_ids, &db, &active_lobbies, groq_key](std::optional<std::map<std::string, drawfusion::GameMasterClient::PlayerScore>> results) {
                 if (results) {
                     spdlog::info("✅ Async batch scoring complete! Got {} results.", results->size());
                     json res_json = json::array();
@@ -279,7 +296,11 @@ int main() {
                             db.UpdateSubmissionScore(s_ids.at(pid), score.score, score.feedback, score.confidence);
                         }
                     }
-                    std::string payload = json{{"type", "judging_results"}, {"results", res_json}}.dump();
+                    json res_payload;
+                    res_payload["type"] = "judging_results";
+                    res_payload["results"] = res_json;
+                    res_payload["free_trial"] = groq_key.empty();
+                    std::string payload = res_payload.dump();
                     loop->defer([global_app, topic, payload, lobby_code, &active_lobbies]() {
                         global_app->publish(topic, payload, uWS::OpCode::TEXT, false);
                         active_lobbies[lobby_code].round_active = false;
@@ -389,12 +410,14 @@ int main() {
                 }
 
                 // GLOBAL RATE LIMIT (Prevent generic spam - max 1 action per second)
-                auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - data->last_action_time).count() < 1) {
-                    ws->send(json{{"type", "error"}, {"message", "Rate limit exceeded. Please wait a moment."}}.dump(), uWS::OpCode::TEXT);
-                    return;
+                if (type != "peek_stream" && type != "start_peek" && type != "stop_peek") {
+                    auto now = std::chrono::steady_clock::now();
+                    if (std::chrono::duration_cast<std::chrono::seconds>(now - data->last_action_time).count() < 1) {
+                        ws->send(json{{"type", "error"}, {"message", "Rate limit exceeded. Please wait a moment."}}.dump(), uWS::OpCode::TEXT);
+                        return;
+                    }
+                    data->last_action_time = now;
                 }
-                data->last_action_time = now;
 
                 // 2. DELETE ACCOUNT
                 if (type == "delete_account") {
@@ -427,11 +450,13 @@ int main() {
                 if (type == "create_lobby") {
                     std::string groq_key = msg.value("groq_key", "");
 
-                    // Validate API keys
-                    auto err = ai_client.ValidateKeys(groq_key);
-                    if (err) {
-                        ws->send(json{{"type", "error"}, {"message", *err}}.dump(), uWS::OpCode::TEXT);
-                        return;
+                    // Validate API keys ONLY if provided (otherwise it's a Free Trial)
+                    if (!groq_key.empty()) {
+                        auto err = ai_client.ValidateKeys(groq_key);
+                        if (err) {
+                            ws->send(json{{"type", "error"}, {"message", *err}}.dump(), uWS::OpCode::TEXT);
+                            return;
+                        }
                     }
 
                     // System capacity limit (portfolio safety constraint)
@@ -620,7 +645,8 @@ int main() {
                         auto lobby = db.GetLobbyByCode(data->lobby_code);
                         if (lobby) {
                             if (ctx.session_id.empty()) {
-                                auto sess = db.CreateGameSession(lobby->id, "multiplayer");
+                                int total_rounds = groq_key.empty() ? 1 : 3;
+                                auto sess = db.CreateGameSession(lobby->id, "multiplayer", total_rounds);
                                 if (sess) ctx.session_id = *sess;
                             }
                             if (!ctx.session_id.empty()) {
@@ -750,6 +776,82 @@ int main() {
                         matches.push_back(item);
                     }
                     ws->send(json{{"type", "history_results"}, {"matches", matches}}.dump(), uWS::OpCode::TEXT);
+                }
+
+                // 7. PEEKING MECHANIC
+                else if (type == "start_peek") {
+                    if (data->lobby_code.empty() || !active_lobbies.count(data->lobby_code)) return;
+                    std::string target_username = msg.value("target", "");
+                    if (target_username.empty() || target_username == data->username) return;
+                    
+                    auto& ctx = active_lobbies[data->lobby_code];
+                    ctx.peekers_of[target_username].insert(data->username);
+                    
+                    if (ctx.peekers_of[target_username].size() == 1) {
+                         std::string target_player_id = getPlayerIdByUsernameInLobby(db, data->lobby_code, target_username);
+                         if (!target_player_id.empty()) {
+                             std::string target_topic = "user:" + target_player_id;
+                             global_app->publish(target_topic, json{{"type", "peek_alert"}, {"peeker", data->username}}.dump(), uWS::OpCode::TEXT, false);
+                         }
+                    }
+                }
+                else if (type == "stop_peek") {
+                    if (data->lobby_code.empty() || !active_lobbies.count(data->lobby_code)) return;
+                    std::string target_username = msg.value("target", "");
+                    
+                    auto& ctx = active_lobbies[data->lobby_code];
+                    ctx.peekers_of[target_username].erase(data->username);
+                    
+                    if (ctx.peekers_of[target_username].empty()) {
+                         std::string target_player_id = getPlayerIdByUsernameInLobby(db, data->lobby_code, target_username);
+                         if (!target_player_id.empty()) {
+                             std::string target_topic = "user:" + target_player_id;
+                             global_app->publish(target_topic, json{{"type", "stop_peek_alert"}}.dump(), uWS::OpCode::TEXT, false);
+                         }
+                    }
+                }
+                else if (type == "peek_stream") {
+                    if (data->lobby_code.empty() || !active_lobbies.count(data->lobby_code)) return;
+                    std::string b64_image = msg.value("image", "");
+                    
+                    auto& ctx = active_lobbies[data->lobby_code];
+                    auto& peekers = ctx.peekers_of[data->username];
+                    
+                    if (!peekers.empty()) {
+                        std::string payload = json{{"type", "peek_stream"}, {"image", b64_image}}.dump();
+                        for (const auto& peeker_username : peekers) {
+                             std::string peeker_player_id = getPlayerIdByUsernameInLobby(db, data->lobby_code, peeker_username);
+                             if (!peeker_player_id.empty()) {
+                                 std::string peeker_topic = "user:" + peeker_player_id;
+                                 global_app->publish(peeker_topic, payload, uWS::OpCode::TEXT, false);
+                             }
+                        }
+                    }
+                }
+                
+                // 8. SABOTAGE MECHANIC
+                else if (type == "sabotage") {
+                    if (data->lobby_code.empty() || !active_lobbies.count(data->lobby_code)) return;
+                    std::string target_username = msg.value("target", "");
+                    std::string attack_type = msg.value("attack", "");
+                    
+                    std::string target_player_id = getPlayerIdByUsernameInLobby(db, data->lobby_code, target_username);
+                    if (!target_player_id.empty()) {
+                        std::string target_topic = "user:" + target_player_id;
+                        global_app->publish(target_topic, json{
+                            {"type", "sabotage_alert"}, 
+                            {"attack", attack_type},
+                            {"attacker", data->username}
+                        }.dump(), uWS::OpCode::TEXT, false);
+                        
+                        // Notify lobby for event log
+                        std::string lobby_topic = "lobby:" + data->lobby_code;
+                        global_app->publish(lobby_topic, json{
+                            {"type", "game_event"},
+                            {"message", data->username + " used " + attack_type + " on " + target_username + "!"},
+                            {"bad", true}
+                        }.dump(), uWS::OpCode::TEXT, false);
+                    }
                 }
 
             } catch (const json::parse_error& e) {

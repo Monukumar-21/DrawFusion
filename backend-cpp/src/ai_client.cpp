@@ -12,8 +12,6 @@
 
 namespace drawfusion {
 
-// ── Constructor ─────────────────────────────────────────────────
-
 GameMasterClient::GameMasterClient(const AIClientConfig& config)
     : config_(config)
 {
@@ -36,8 +34,6 @@ GameMasterClient::GameMasterClient(const AIClientConfig& config)
         config_.target_address, config_.deadline_ms, config_.max_retries);
 }
 
-// ── Helpers ─────────────────────────────────────────────────────
-
 std::unique_ptr<grpc::ClientContext> GameMasterClient::MakeContext() {
     auto ctx = std::make_unique<grpc::ClientContext>();
     auto deadline = std::chrono::system_clock::now()
@@ -53,8 +49,6 @@ void GameMasterClient::LogRpcError(const std::string& rpc_name, const grpc::Stat
         status.error_message()
     );
 }
-
-// ── Health Check ────────────────────────────────────────────────
 
 bool GameMasterClient::IsHealthy() {
     drawfusion::HealthCheckRequest request;
@@ -76,8 +70,6 @@ bool GameMasterClient::IsHealthy() {
     return false;
 }
 
-// ── ValidateKeys ────────────────────────────────────────────────
-
 std::optional<std::string> GameMasterClient::ValidateKeys(const std::string& groq_key) {
     drawfusion::ValidateKeysRequest request;
     request.set_groq_key(groq_key);
@@ -98,8 +90,6 @@ std::optional<std::string> GameMasterClient::ValidateKeys(const std::string& gro
     LogRpcError("ValidateKeys", status);
     return "Failed to contact AI service for validation.";
 }
-
-// ── GetPrompt ───────────────────────────────────────────────────
 
 std::optional<std::tuple<std::string, std::string>> GameMasterClient::GetPrompt(
     const std::string& game_id,
@@ -146,8 +136,6 @@ std::optional<std::tuple<std::string, std::string>> GameMasterClient::GetPrompt(
     return std::nullopt;
 }
 
-// ── JudgeRound ───────────────────────────────────────────────
-
 std::optional<std::map<std::string, GameMasterClient::PlayerScore>> GameMasterClient::JudgeRound(
     const std::string& round_id,
     const std::string& prompt,
@@ -188,8 +176,6 @@ std::optional<std::map<std::string, GameMasterClient::PlayerScore>> GameMasterCl
     LogRpcError("JudgeRound", status);
     return std::nullopt;
 }
-
-// ── JudgeRoundAsync ───────────────────────────────────────────────
 
 void GameMasterClient::JudgeRoundAsync(
     const std::string& round_id,
@@ -244,8 +230,6 @@ void GameMasterClient::JudgeRoundAsync(
         });
 }
 
-// ── GetHint ─────────────────────────────────────────────────────
-
 std::optional<std::string> GameMasterClient::GetHint(
     const std::string& game_id,
     const std::string& prompt,
@@ -273,8 +257,6 @@ std::optional<std::string> GameMasterClient::GetHint(
     LogRpcError("GetHint", status);
     return std::nullopt;
 }
-
-// ── GetFeedback ─────────────────────────────────────────────────
 
 std::optional<std::tuple<std::string, std::vector<std::string>, std::vector<std::string>>>
 GameMasterClient::GetFeedback(

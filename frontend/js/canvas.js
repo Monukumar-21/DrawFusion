@@ -37,19 +37,25 @@ class CanvasManager {
     }
     
     resize() {
-        const parent = this.canvas.parentElement;
-        // Save current image data
-        const tempImageData = this.ctx.getImageData(0, 0, this.canvas.width || 1, this.canvas.height || 1);
+        // Only resize if we actually have dimensions
+        if (!this.canvas.clientWidth || !this.canvas.clientHeight) return;
         
-        // Set canvas internal dimensions to match display size
-        this.canvas.width = parent.clientWidth - 40; // accounting for padding
-        this.canvas.height = parent.clientHeight - 80;
+        // Use a temporary canvas to save the current drawing before resizing
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = this.canvas.width || 1;
+        tempCanvas.height = this.canvas.height || 1;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(this.canvas, 0, 0);
+        
+        // Set internal dimensions to match the actual display size
+        this.canvas.width = this.canvas.clientWidth;
+        this.canvas.height = this.canvas.clientHeight;
         
         // Restore white background
         this.clear();
         
-        // Restore image data if we had any (though resizing usually clears it in games like this)
-        // For simplicity, we just clear on resize.
+        // Restore previous drawing (will be anchored to top-left)
+        this.ctx.drawImage(tempCanvas, 0, 0);
     }
     
     startDrawing(e) {

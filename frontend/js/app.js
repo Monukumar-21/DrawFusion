@@ -1,4 +1,3 @@
-// Constants
 // If running locally via python -m http.server 5500, point directly to the C++ server on 9001
 const isLocalDev = window.location.port === '5500';
 const API_URL = isLocalDev ? 'http://localhost:9001/api' : `${window.location.protocol}//${window.location.host}/api`;
@@ -12,7 +11,6 @@ let currentLobby = null;
 let currentPrompt = "";
 let timerInterval = null;
 
-// DOM Elements
 const els = {
     screens: document.querySelectorAll('.screen'),
     loading: document.getElementById('loading-overlay'),
@@ -63,13 +61,20 @@ const els = {
     btnNextRound: document.getElementById('btn-next-round'),
     btnResultsMenu: document.getElementById('btn-results-menu'),
     
+    // New UI Layout Elements
+    gamePlayerList: document.getElementById('game-player-list'),
+    gameEventLog: document.getElementById('game-event-log'),
+    peekOverlay: document.getElementById('peek-overlay-container'),
+    peekTargetName: document.getElementById('peeking-target-name'),
+    peekImageView: document.getElementById('peek-image-view'),
+    inkOverlay: document.getElementById('ink-overlay'),
+    
     // History
     btnMatchHistory: document.getElementById('btn-match-history'),
     historyList: document.getElementById('history-list'),
     btnBackMenu: document.getElementById('btn-back-menu')
 };
 
-// Utils
 const showScreen = (screenId) => {
     els.screens.forEach(s => s.classList.remove('active'));
     document.getElementById(screenId).classList.add('active');
@@ -89,7 +94,15 @@ const hideLoading = () => {
     if(els.aiLoading) els.aiLoading.classList.remove('active');
 };
 
-// Auth Flow
+const logGameEvent = (msg, isBad = false) => {
+    if (!els.gameEventLog) return;
+    const li = document.createElement('li');
+    li.textContent = msg;
+    if (isBad) li.classList.add('bad-event');
+    els.gameEventLog.appendChild(li);
+    els.gameEventLog.scrollTop = els.gameEventLog.scrollHeight;
+};
+
 let isLoginMode = true;
 
 els.tabLogin.addEventListener('click', () => {
@@ -146,7 +159,6 @@ els.authForm.addEventListener('submit', async (e) => {
     }
 });
 
-// WebSocket Flow
 const connectWebSocket = () => {
     if (!token) return;
     
@@ -249,6 +261,38 @@ const connectWebSocket = () => {
                 showScreen('menu-screen');
                 break;
                 
+            case 'peek_alert':
+                logGameEvent(`${msg.peeker} is peeking at you!`, true);
+                if (!window.peekInterval && canvasMgr) {
+                    window.peekInterval = setInterval(() => {
+                        ws.send(JSON.stringify({ type: 'peek_stream', image: canvasMgr.getBase64() }));
+                    }, 250);
+                }
+                break;
+                
+            case 'stop_peek_alert':
+                if (window.peekInterval) {
+                    clearInterval(window.peekInterval);
+                    window.peekInterval = null;
+                }
+                break;
+                
+            case 'peek_stream':
+                els.peekImageView.src = msg.image;
+                break;
+                
+            case 'sabotage_alert':
+                logGameEvent(`${msg.attacker} used ${msg.attack} on you!`, true);
+                if (msg.attack === 'ink') {
+                    els.inkOverlay.style.display = 'block';
+                    setTimeout(() => els.inkOverlay.style.display = 'none', 3000);
+                }
+                break;
+                
+            case 'game_event':
+                logGameEvent(msg.message, msg.bad);
+                break;
+                
             case 'hint_response':
                 els.hintDisplay.style.display = 'block';
                 els.hintDisplay.textContent = "AI Hint: " + msg.hint;
@@ -269,7 +313,7 @@ const connectWebSocket = () => {
                 
             case 'judging_results':
                 hideLoading();
-                showResults(msg.results);
+                showResults(msg.results, msg.free_trial);
                 break;
                 
             case 'history_results':
@@ -301,10 +345,9 @@ const connectWebSocket = () => {
     };
 };
 
-// Menu Actions
 els.btnCreateLobby.addEventListener('click', () => {
     const groq = els.hostGroqKey ? els.hostGroqKey.value.trim() : '';
-    showLoading('Validating Key & Creating lobby...');
+    showLoading(groq ? 'Validating Key & Creating lobby...' : 'Starting Free Trial Lobby...');
     ws.send(JSON.stringify({ type: 'create_lobby', groq_key: groq }));
 });
 
@@ -355,7 +398,6 @@ els.btnChangePassword.addEventListener('click', () => {
     }
 });
 
-// Extra Back Buttons
 els.btnLeaveLobby.addEventListener('click', () => {
     if (confirm("Are you sure you want to leave the lobby?")) {
         ws.send(JSON.stringify({ type: 'leave_lobby' }));
@@ -371,7 +413,6 @@ els.btnResultsMenu.addEventListener('click', () => {
     }
 });
 
-// Lobby UI
 let players = [];
 const updatePlayerList = (list) => {
     players = list;
@@ -423,8 +464,11 @@ const updatePlayerReadyStatus = (user, ready) => {
     }
 };
 
-// Game Logic
 let canvasMgr = null;
+let isPeeking = false;
+let peekTarget = "";
+let peekPenaltyMs = 0;
+
 const startGame = (end_time_ms) => {
     showScreen('game-screen');
     if (!canvasMgr) {
@@ -438,21 +482,109 @@ const startGame = (end_time_ms) => {
     canvasMgr.resize();
     canvasMgr.clear();
     
-    // Sync Timer
+    // Clear logs and flags
+    window.hasUsedSabotage = false;
+    els.gameEventLog.innerHTML = '';
+    logGameEvent('Round started!');
+    
+    // Populate Game Player List with Action Buttons
+    els.gamePlayerList.innerHTML = '';
+    players.forEach(p => {
+        const li = document.createElement('li');
+        li.innerHTML = `<strong>${p}</strong>`;
+        
+        if (p !== username) { // Don't show buttons for self
+            const actions = document.createElement('div');
+            actions.className = 'player-actions';
+            
+            // Peek Button (Hold to peek)
+            const btnPeek = document.createElement('button');
+            btnPeek.className = 'btn-icon';
+            btnPeek.textContent = '👀 Peek';
+            
+            const startPeeking = () => {
+                if (isPeeking) return;
+                isPeeking = true;
+                peekTarget = p;
+                els.peekTargetName.textContent = p;
+                els.peekOverlay.style.display = 'flex';
+                els.gameTimer.parentElement.classList.add('timer-penalty');
+                ws.send(JSON.stringify({ type: 'start_peek', target: p }));
+            };
+            
+            const stopPeeking = () => {
+                if (!isPeeking) return;
+                isPeeking = false;
+                els.peekOverlay.style.display = 'none';
+                els.peekImageView.src = '';
+                els.gameTimer.parentElement.classList.remove('timer-penalty');
+                ws.send(JSON.stringify({ type: 'stop_peek', target: p }));
+            };
+            
+            btnPeek.addEventListener('mousedown', startPeeking);
+            btnPeek.addEventListener('mouseup', stopPeeking);
+            btnPeek.addEventListener('mouseleave', stopPeeking);
+            
+            // Touch support for mobile peek hold
+            btnPeek.addEventListener('touchstart', (e) => { e.preventDefault(); startPeeking(); });
+            btnPeek.addEventListener('touchend', stopPeeking);
+            
+            // Sabotage Button
+            const btnSabotage = document.createElement('button');
+            btnSabotage.className = 'btn-icon';
+            btnSabotage.textContent = '🦑 Ink (-5s)';
+            btnSabotage.onclick = () => {
+                if (window.hasUsedSabotage) {
+                    alert('You can only use Sabotage once per round!');
+                    return;
+                }
+                if (confirm(`Spend 5 seconds to throw Ink at ${p}?`)) {
+                    window.hasUsedSabotage = true;
+                    btnSabotage.disabled = true;
+                    peekPenaltyMs += 5000;
+                    ws.send(JSON.stringify({ type: 'sabotage', target: p, attack: 'ink' }));
+                }
+            };
+            
+            actions.appendChild(btnPeek);
+            actions.appendChild(btnSabotage);
+            li.appendChild(actions);
+        }
+        
+        els.gamePlayerList.appendChild(li);
+    });
+    
+    // Sync Timer with Penalty System
     clearInterval(timerInterval);
+    let lastTick = Date.now();
+    peekPenaltyMs = 0;
+    isPeeking = false;
     
     timerInterval = setInterval(() => {
         const now = Date.now();
-        const timeLeftMs = end_time_ms - now;
+        const delta = now - lastTick;
+        lastTick = now;
+        
+        if (isPeeking) {
+            peekPenaltyMs += delta; // 1x extra penalty = 2x total decay
+        }
+        
+        const timeLeftMs = end_time_ms - now - peekPenaltyMs;
         
         if (timeLeftMs <= 0) {
             clearInterval(timerInterval);
             els.gameTimer.textContent = '0';
+            els.gameTimer.parentElement.classList.remove('timer-penalty');
+            if(isPeeking) {
+                isPeeking = false;
+                els.peekOverlay.style.display = 'none';
+                ws.send(JSON.stringify({ type: 'stop_peek', target: peekTarget }));
+            }
             els.btnSubmitDrawing.click();
         } else {
             els.gameTimer.textContent = Math.ceil(timeLeftMs / 1000);
         }
-    }, 100); // Check more frequently to avoid jitter
+    }, 100);
 };
 
 els.btnSubmitDrawing.addEventListener('click', () => {
@@ -493,17 +625,21 @@ els.btnSubmitDrawing.addEventListener('click', () => {
     showAILoading();
 });
 
-// Hint Logic
 els.btnHint.addEventListener('click', () => {
     if (els.btnHint.disabled) return;
     ws.send(JSON.stringify({ type: 'get_hint' }));
     els.btnHint.disabled = true; // Disable after one click
 });
 
-// Results Logic
-const showResults = (results) => {
+const showResults = (results, isFreeTrial = false) => {
     showScreen('results-screen');
     els.leaderboard.innerHTML = '';
+    
+    if (isFreeTrial) {
+        els.btnNextRound.style.display = 'none';
+    } else {
+        els.btnNextRound.style.display = 'inline-block';
+    }
     
     results.sort((a,b) => a.rank - b.rank).forEach(r => {
         const card = document.createElement('div');

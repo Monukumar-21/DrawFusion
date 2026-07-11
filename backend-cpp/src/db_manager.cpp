@@ -66,7 +66,6 @@ public:
         return sqlite3_column_double(stmt_, idx);
     }
 
-    // Step through results
     bool step() {
         return sqlite3_step(stmt_) == SQLITE_ROW;
     }
@@ -98,7 +97,6 @@ DatabaseManager::DatabaseManager(const std::string& db_path)
 
     spdlog::info("[DB] Opened database: {}", db_path);
 
-    // ── Configure SQLite for our use case ──────────────────────
     // WAL mode = faster concurrent reads (like Python's threading mode)
     Execute("PRAGMA journal_mode=WAL");
     // Enable foreign keys (SQLite has them OFF by default!)
@@ -108,7 +106,6 @@ DatabaseManager::DatabaseManager(const std::string& db_path)
     // Busy timeout: wait 5 seconds if another thread has the lock
     sqlite3_busy_timeout(db_, 5000);
 
-    // ── Create tables ──────────────────────────────────────────
     RunMigrations();
 }
 

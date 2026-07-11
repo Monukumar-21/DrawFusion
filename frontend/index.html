@@ -16,9 +16,6 @@
             <h1 class="logo-title">Draw<span class="gradient-text">Fusion</span></h1>
             <p class="subtitle">An AI-Judged Drawing Battle</p>
             
-            <div class="auth-note">
-                <small><em>*Note: Because of database constraints and lobby management, you must re-register every time you play.*</em></small>
-            </div>
             
             <div class="auth-tabs">
                 <button class="tab-btn active" id="tab-login">Login</button>
@@ -39,8 +36,11 @@
             
             <div class="menu-actions">
                 <div class="host-keys-box" style="margin-bottom: 1rem;">
-                    <h4 style="color: var(--text-secondary); margin-bottom: 0.5rem; font-size: 0.9rem;">Lobby Host API Keys (Optional)</h4>
-                    <input type="password" id="host-groq-key" placeholder="Gemini API Key (for LLM and AI Judge)">
+                    <h4 style="color: var(--text-secondary); margin-bottom: 0.5rem; font-size: 0.9rem;">Host API Key</h4>
+                    <p style="color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 0.5rem;">
+                        Get your free Gemini API key from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: var(--primary-color); text-decoration: underline;">Google AI Studio</a>. (Leave blank for a 1-Round Free Trial!)
+                    </p>
+                    <input type="password" id="host-groq-key" placeholder="Gemini API Key (Optional for Free Trial)">
                 </div>
                 <button id="btn-create-lobby" class="btn-primary lg">Create New Lobby</button>
                 
@@ -78,30 +78,59 @@
         <!-- Game Screen -->
         <section id="game-screen" class="screen">
             <div class="game-header glass-panel-sm">
-                <button id="btn-quit-game" class="btn-back">← Quit</button>
+                <button id="btn-quit-game" class="btn-back" style="margin: 0;">← Quit</button>
                 <div class="prompt-box">
-                    <h3>Draw this:</h3>
-                    <h2 id="current-prompt" class="gradient-text">Waiting for prompt...</h2>
+                    <h3 style="margin:0;">Draw this:</h3>
+                    <h2 id="current-prompt" class="gradient-text" style="margin:0;">Waiting for prompt...</h2>
                 </div>
                 <div class="timer-box">
                     <span id="game-timer">60</span>s
                 </div>
             </div>
             
-            <div class="canvas-container glass-panel">
-                <canvas id="drawing-canvas"></canvas>
+            <div class="game-layout">
+                <!-- Left: Players & Peeking -->
+                <div class="game-sidebar glass-panel-sm">
+                    <h3>Players</h3>
+                    <ul id="game-player-list" class="player-list compact">
+                        <!-- Players injected here dynamically -->
+                    </ul>
+                </div>
                 
-                <div class="tools-panel">
-                    <input type="color" id="color-picker" value="#ffffff">
-                    <input type="range" id="brush-size" min="1" max="20" value="5">
-                    <button id="btn-clear" class="btn-tool">Clear</button>
-                    <button id="btn-hint" class="btn-tool">Get Hint</button>
+                <!-- Center: Canvas & Tools -->
+                <div class="game-center">
+                    <div class="canvas-container glass-panel" id="canvas-container-wrap">
+                        <canvas id="drawing-canvas"></canvas>
+                        
+                        <!-- Overlays -->
+                        <div id="peek-overlay-container" class="canvas-overlay" style="display: none;">
+                            <div class="overlay-header">👀 Peeking at <span id="peeking-target-name">...</span></div>
+                            <img id="peek-image-view" src="" alt="Peeking">
+                        </div>
+                        <div id="ink-overlay" class="canvas-overlay ink-splat" style="display: none;"></div>
+                    </div>
+                    
+                    <div class="tools-panel glass-panel-sm">
+                        <div class="tool-group">
+                            <input type="color" id="color-picker" value="#000000">
+                            <input type="range" id="brush-size" min="1" max="20" value="5">
+                        </div>
+                        <div class="tool-group">
+                            <button id="btn-clear" class="btn-tool">Clear</button>
+                            <button id="btn-hint" class="btn-tool">Hint</button>
+                            <button id="btn-submit-drawing" class="btn-primary pulse" style="padding: 8px 20px;">Submit</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Right: Event Log -->
+                <div class="game-sidebar glass-panel-sm">
+                    <h3>Event Log</h3>
+                    <ul id="game-event-log" class="event-log">
+                        <!-- Events injected here dynamically -->
+                    </ul>
                 </div>
             </div>
-            
-            <div id="hint-display" class="hint-box"></div>
-            
-            <button id="btn-submit-drawing" class="btn-primary lg pulse">Submit Drawing</button>
         </section>
 
         <!-- Results Screen -->
